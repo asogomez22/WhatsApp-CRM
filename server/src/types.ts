@@ -22,8 +22,6 @@ export interface Business {
   stripeSubscriptionId?: string;
   active: boolean;
   createdAt: string;
-  googleCalendarConnected: boolean;
-  googleCalendarId?: string;
 }
 
 export interface WhatsappChannel {
@@ -76,7 +74,6 @@ export interface Appointment {
   status: AppointmentStatus;
   source: "manual" | "whatsapp";
   notes?: string;
-  googleCalendarEventId?: string;
   reviewRequestedAt?: string;
   reminderSentAt?: string;
   createdAt: string;

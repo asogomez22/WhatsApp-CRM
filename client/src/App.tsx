@@ -1,15 +1,23 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import { Appointment, DashboardSummary, MessageLog, Service } from "./types";
+import { Appointment, DashboardSummary, MessageLog } from "./types";
 
 const today = new Date().toISOString().slice(0, 10);
 
 const timeLabel = (iso: string) =>
   new Intl.DateTimeFormat("es-ES", {
+    timeStyle: "short",
+    timeZone: "UTC"
+  }).format(new Date(iso));
+
+const dateTimeLabel = (iso: string) =>
+  new Intl.DateTimeFormat("es-ES", {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "UTC"
   }).format(new Date(iso));
+
+const weekdayLabel = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
 const statusLabel: Record<Appointment["status"], string> = {
   pending: "Pendiente",
@@ -29,16 +37,11 @@ function App() {
   const [appointmentForm, setAppointmentForm] = useState({
     contactId: "",
     serviceId: "",
-    startAt: "",
-    endAt: ""
+    startAtLocal: ""
   });
   const [simulateForm, setSimulateForm] = useState({
     fromPhone: "+34655566777",
     text: "Quiero cita"
-  });
-  const [calendarForm, setCalendarForm] = useState({
-    googleCalendarConnected: false,
-    googleCalendarId: "primary"
   });
 
   useEffect(() => {
@@ -47,10 +50,6 @@ function App() {
       .then((businesses) => {
         if (businesses[0]) {
           setBusinessId(businesses[0].id);
-          setCalendarForm({
-            googleCalendarConnected: businesses[0].googleCalendarConnected,
-            googleCalendarId: businesses[0].googleCalendarId ?? "primary"
-          });
         }
       })
       .catch((caughtError: Error) => setError(caughtError.message));
@@ -62,17 +61,13 @@ function App() {
     try {
       const data = await api.getDashboard(selectedBusinessId, selectedDate);
       setDashboard(data);
-      setCalendarForm({
-        googleCalendarConnected: data.business.googleCalendarConnected,
-        googleCalendarId: data.business.googleCalendarId ?? "primary"
-      });
       setAppointmentForm((current) => ({
         ...current,
-        contactId: data.contacts[0]?.id ?? "",
-        serviceId: data.services[0]?.id ?? ""
+        contactId: current.contactId || data.contacts[0]?.id || "",
+        serviceId: current.serviceId || data.services[0]?.id || ""
       }));
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : "No se pudo cargar el dashboard");
+      setError(caughtError instanceof Error ? caughtError.message : "No se pudo cargar el panel");
     } finally {
       setLoading(false);
     }
@@ -93,6 +88,10 @@ function App() {
     [dashboard?.services]
   );
 
+  const nextAppointment = dashboard?.appointments.find((appointment) =>
+    ["pending", "scheduled", "confirmed"].includes(appointment.status)
+  );
+
   const fillEndAt = (serviceId: string, startAt: string) => {
     if (!serviceId || !startAt) {
       return "";
@@ -108,34 +107,52 @@ function App() {
 
   const submitAppointment = async (event: FormEvent) => {
     event.preventDefault();
-    if (!dashboard) {
+    if (!dashboard || !appointmentForm.startAtLocal) {
       return;
     }
 
-    const endAt = fillEndAt(appointmentForm.serviceId, appointmentForm.startAt);
-    await api.createAppointment(dashboard.business.id, {
-      ...appointmentForm,
-      endAt,
-      status: "scheduled",
-      source: "manual"
-    });
-    await loadDashboard(dashboard.business.id, date);
+    const startAt = new Date(appointmentForm.startAtLocal).toISOString();
+
+    try {
+      await api.createAppointment(dashboard.business.id, {
+        contactId: appointmentForm.contactId,
+        serviceId: appointmentForm.serviceId,
+        startAt,
+        endAt: fillEndAt(appointmentForm.serviceId, startAt),
+        status: "scheduled",
+        source: "manual"
+      });
+      setAppointmentForm((current) => ({ ...current, startAtLocal: "" }));
+      await loadDashboard(dashboard.business.id, date);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "No se pudo crear la cita");
+    }
   };
 
   const updateStatus = async (appointmentId: string, status: Appointment["status"]) => {
     if (!dashboard) {
       return;
     }
-    await api.updateAppointment(dashboard.business.id, appointmentId, { status });
-    await loadDashboard(dashboard.business.id, date);
+
+    try {
+      await api.updateAppointment(dashboard.business.id, appointmentId, { status });
+      await loadDashboard(dashboard.business.id, date);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "No se pudo actualizar la cita");
+    }
   };
 
   const runAutomations = async () => {
     if (!dashboard) {
       return;
     }
-    await api.processAutomations(dashboard.business.id);
-    await loadDashboard(dashboard.business.id, date);
+
+    try {
+      await api.processAutomations(dashboard.business.id);
+      await loadDashboard(dashboard.business.id, date);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "No se pudieron procesar las automatizaciones");
+    }
   };
 
   const simulateMessage = async (event: FormEvent) => {
@@ -143,106 +160,111 @@ function App() {
     if (!dashboard) {
       return;
     }
-    await api.simulateIncomingMessage(dashboard.business.id, simulateForm);
-    await loadDashboard(dashboard.business.id, date);
-  };
 
-  const saveCalendar = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!dashboard) {
-      return;
+    try {
+      await api.simulateIncomingMessage(dashboard.business.id, simulateForm);
+      await loadDashboard(dashboard.business.id, date);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "No se pudo procesar el mensaje");
     }
-    await api.updateGoogleCalendar(dashboard.business.id, calendarForm);
-    await loadDashboard(dashboard.business.id, date);
   };
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div>
-          <p className="eyebrow">TarracoWebs</p>
-          <h1>WhatsApp CRM</h1>
-          <p className="muted">
-            Agenda diaria, reseñas automáticas, anti no-show y captación de citas por WhatsApp.
-          </p>
-        </div>
-
-        {dashboard && (
-          <div className="panel tinted">
-            <div className="stack-sm">
-              <p className="eyebrow">Canal dedicado</p>
-              <strong>{dashboard.channel?.displayName ?? "Sin canal"}</strong>
-              <span className="muted">{dashboard.channel?.phoneE164 ?? "Pendiente de alta"}</span>
-            </div>
-            <div className="pill-row">
-              <span className="pill">{dashboard.business.plan}</span>
-              <span className="pill">{dashboard.business.city}</span>
-            </div>
+      <main className="dashboard-page">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">TarracoWebs · WhatsApp CRM</p>
+            <h1>Dashboard diario</h1>
+            <p className="muted">Simple, operativo y centrado en citas, mensajes y automatizaciones.</p>
           </div>
-        )}
+          <div className="topbar-actions">
+            <label className="field inline-field">
+              <span>Fecha</span>
+              <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+            </label>
+            <button className="secondary" onClick={runAutomations} type="button">
+              Procesar automatizaciones
+            </button>
+          </div>
+        </header>
 
-        <div className="panel">
-          <label className="field">
-            <span>Fecha de agenda</span>
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-          </label>
-          <button className="secondary" onClick={runAutomations} type="button">
-            Procesar automatizaciones
-          </button>
-        </div>
-      </aside>
-
-      <main className="content">
         {error && <div className="error-banner">{error}</div>}
+
         {loading || !dashboard ? (
           <div className="loading-card">Cargando panel...</div>
         ) : (
           <>
-            <section className="hero">
-              <div>
-                <p className="eyebrow">Negocio piloto</p>
+            <section className="hero-card">
+              <div className="hero-copy">
+                <p className="eyebrow">Negocio activo</p>
                 <h2>{dashboard.business.name}</h2>
                 <p className="muted">
-                  Canal propio por cliente, agenda compartida para los tres módulos y lista para integrarse con Google
-                  Calendar.
+                  {dashboard.business.city} · {dashboard.business.email}
                 </p>
+                <div className="pill-row">
+                  <span className="pill">{dashboard.business.plan}</span>
+                  <span className="pill">
+                    {dashboard.channel?.phoneE164 ? `WhatsApp ${dashboard.channel.phoneE164}` : "Canal pendiente"}
+                  </span>
+                </div>
               </div>
-              <div className="hero-actions">
-                <button className="primary" type="button" onClick={() => setBusinessId(dashboard.business.id)}>
-                  Panel activo
-                </button>
-                <span className="muted">{dashboard.business.email}</span>
+
+              <div className="hero-aside">
+                <div className="summary-tile">
+                  <span className="summary-label">Próxima cita</span>
+                  <strong>{nextAppointment ? timeLabel(nextAppointment.startAt) : "Sin citas activas"}</strong>
+                  <span className="muted">
+                    {nextAppointment
+                      ? contactsById.get(nextAppointment.contactId)?.name ?? "Paciente"
+                      : "La agenda está despejada"}
+                  </span>
+                </div>
+                <div className="summary-tile">
+                  <span className="summary-label">Canal</span>
+                  <strong>{dashboard.channel?.displayName ?? "No configurado"}</strong>
+                  <span className="muted">
+                    {dashboard.channel?.templatesReady ? "Plantillas listas" : "Pendiente de plantillas"}
+                  </span>
+                </div>
               </div>
             </section>
 
             <section className="metrics-grid">
-              <MetricCard label="Citas hoy" value={dashboard.metrics.todayAppointments} accent="sunrise" />
-              <MetricCard label="Por confirmar" value={dashboard.metrics.pendingConfirmations} accent="ocean" />
-              <MetricCard label="Reseñas pendientes" value={dashboard.metrics.reviewsPending} accent="moss" />
-              <MetricCard label="Flujos abiertos" value={dashboard.metrics.whatsappOpenFlows} accent="wine" />
+              <MetricCard label="Citas hoy" value={dashboard.metrics.todayAppointments} tone="ocean" />
+              <MetricCard label="Por confirmar" value={dashboard.metrics.pendingConfirmations} tone="sand" />
+              <MetricCard label="Reseñas pendientes" value={dashboard.metrics.reviewsPending} tone="moss" />
+              <MetricCard label="Flujos abiertos" value={dashboard.metrics.whatsappOpenFlows} tone="wine" />
             </section>
 
-            <section className="dashboard-grid">
-              <div className="panel spacious">
+            <section className="main-grid">
+              <section className="panel panel-main">
                 <div className="section-head">
                   <div>
-                    <p className="eyebrow">Agenda del día</p>
-                    <h3>Operativa clínica</h3>
+                    <p className="eyebrow">Agenda diaria</p>
+                    <h3>Citas del día</h3>
                   </div>
                   <span className="muted">{dashboard.appointments.length} citas</span>
                 </div>
 
                 <div className="agenda-list">
-                  {dashboard.appointments.map((appointment) => (
-                    <article key={appointment.id} className="agenda-item">
-                      <div>
-                        <strong>{contactsById.get(appointment.contactId)?.name ?? "Paciente"}</strong>
-                        <p className="muted">{servicesById.get(appointment.serviceId)?.name ?? "Servicio"}</p>
-                        <p className="muted">{timeLabel(appointment.startAt)}</p>
-                      </div>
-                      <div className="agenda-actions">
-                        <span className={`status-chip status-${appointment.status}`}>{statusLabel[appointment.status]}</span>
-                        <div className="pill-row">
+                  {dashboard.appointments.length ? (
+                    dashboard.appointments.map((appointment) => (
+                      <article key={appointment.id} className="agenda-row">
+                        <div className="agenda-time">
+                          <strong>{timeLabel(appointment.startAt)}</strong>
+                          <span>{servicesById.get(appointment.serviceId)?.durationMinutes ?? 0} min</span>
+                        </div>
+
+                        <div className="agenda-body">
+                          <div className="agenda-main">
+                            <strong>{contactsById.get(appointment.contactId)?.name ?? "Paciente"}</strong>
+                            <p>{servicesById.get(appointment.serviceId)?.name ?? "Servicio"}</p>
+                          </div>
+                          <span className={`status-chip status-${appointment.status}`}>{statusLabel[appointment.status]}</span>
+                        </div>
+
+                        <div className="agenda-actions">
                           <button type="button" onClick={() => updateStatus(appointment.id, "confirmed")}>
                             Confirmar
                           </button>
@@ -253,20 +275,23 @@ function App() {
                             Cancelar
                           </button>
                         </div>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    ))
+                  ) : (
+                    <div className="empty-state">No hay citas para esta fecha.</div>
+                  )}
                 </div>
-              </div>
+              </section>
 
-              <div className="stack-lg">
-                <div className="panel">
+              <aside className="side-column">
+                <section className="panel">
                   <div className="section-head">
                     <div>
                       <p className="eyebrow">Alta rápida</p>
-                      <h3>Nueva cita manual</h3>
+                      <h3>Nueva cita</h3>
                     </div>
                   </div>
+
                   <form className="form-grid" onSubmit={submitAppointment}>
                     <label className="field">
                       <span>Paciente</span>
@@ -283,6 +308,7 @@ function App() {
                         ))}
                       </select>
                     </label>
+
                     <label className="field">
                       <span>Servicio</span>
                       <select
@@ -298,29 +324,35 @@ function App() {
                         ))}
                       </select>
                     </label>
+
                     <label className="field">
-                      <span>Inicio</span>
+                      <span>Fecha y hora</span>
                       <input
                         type="datetime-local"
-                        value={appointmentForm.startAt}
+                        value={appointmentForm.startAtLocal}
                         onChange={(event) =>
-                          setAppointmentForm((current) => ({ ...current, startAt: new Date(event.target.value).toISOString() }))
+                          setAppointmentForm((current) => ({
+                            ...current,
+                            startAtLocal: event.target.value
+                          }))
                         }
                       />
                     </label>
+
                     <button className="primary" type="submit">
                       Guardar cita
                     </button>
                   </form>
-                </div>
+                </section>
 
-                <div className="panel">
+                <section className="panel">
                   <div className="section-head">
                     <div>
                       <p className="eyebrow">WhatsApp</p>
-                      <h3>Simulador de conversación</h3>
+                      <h3>Simular entrada</h3>
                     </div>
                   </div>
+
                   <form className="form-grid" onSubmit={simulateMessage}>
                     <label className="field">
                       <span>Teléfono</span>
@@ -337,90 +369,99 @@ function App() {
                       />
                     </label>
                     <button className="primary" type="submit">
-                      Enviar al flujo
+                      Ejecutar flujo
                     </button>
                   </form>
-                </div>
+                </section>
 
-                <div className="panel">
+                <section className="panel compact-panel">
                   <div className="section-head">
                     <div>
-                      <p className="eyebrow">Google Calendar</p>
-                      <h3>Preparación de integración</h3>
+                      <p className="eyebrow">Configuración visible</p>
+                      <h3>Servicios y horario</h3>
                     </div>
-                    <span className={`status-chip ${dashboard.business.googleCalendarConnected ? "status-confirmed" : "status-pending"}`}>
-                      {dashboard.business.googleCalendarConnected ? "Conectado" : "Pendiente"}
-                    </span>
                   </div>
-                  <form className="form-grid" onSubmit={saveCalendar}>
-                    <label className="field checkbox">
-                      <input
-                        type="checkbox"
-                        checked={calendarForm.googleCalendarConnected}
-                        onChange={(event) =>
-                          setCalendarForm((current) => ({
-                            ...current,
-                            googleCalendarConnected: event.target.checked
-                          }))
-                        }
-                      />
-                      <span>Activar sincronización</span>
-                    </label>
-                    <label className="field">
-                      <span>Calendar ID</span>
-                      <input
-                        value={calendarForm.googleCalendarId}
-                        onChange={(event) =>
-                          setCalendarForm((current) => ({ ...current, googleCalendarId: event.target.value }))
-                        }
-                      />
-                    </label>
-                    <button className="secondary" type="submit">
-                      Guardar configuración
-                    </button>
-                  </form>
-                </div>
-              </div>
+
+                  <div className="service-list">
+                    {dashboard.services.map((service) => (
+                      <div key={service.id} className="service-card">
+                        <strong>{service.name}</strong>
+                        <span>{service.durationMinutes} min</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="availability-grid">
+                    {dashboard.availabilityRules.map((rule) => (
+                      <div key={rule.id} className="rule-card">
+                        <strong>{weekdayLabel[rule.weekday]}</strong>
+                        <span>
+                          {rule.start} - {rule.end}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </aside>
             </section>
 
-            <section className="dashboard-grid">
-              <div className="panel spacious">
+            <section className="bottom-grid">
+              <section className="panel">
                 <div className="section-head">
                   <div>
-                    <p className="eyebrow">Mensajería</p>
-                    <h3>Últimos mensajes</h3>
+                    <p className="eyebrow">Mensajes recientes</p>
+                    <h3>Actividad de WhatsApp</h3>
                   </div>
                 </div>
-                <div className="message-list">
-                  {dashboard.recentMessages.map((message) => (
-                    <MessageItem key={message.id} message={message} contactName={contactsById.get(message.contactId)?.name ?? "Paciente"} />
-                  ))}
-                </div>
-              </div>
 
-              <div className="panel spacious">
-                <div className="section-head">
-                  <div>
-                    <p className="eyebrow">Servicios y reglas</p>
-                    <h3>MVP acotado</h3>
+                <div className="message-list">
+                  {dashboard.recentMessages.length ? (
+                    dashboard.recentMessages.map((message) => (
+                      <MessageItem
+                        key={message.id}
+                        message={message}
+                        contactName={contactsById.get(message.contactId)?.name ?? "Paciente"}
+                      />
+                    ))
+                  ) : (
+                    <div className="empty-state">Todavía no hay mensajes recientes.</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="panel insight-panel">
+                <p className="eyebrow">Resumen operativo</p>
+                <div className="insight-list">
+                  <div className="insight-card">
+                    <strong>Siguiente paso</strong>
+                    <span>
+                      {dashboard.metrics.pendingConfirmations
+                        ? "Hay citas pendientes de confirmar."
+                        : "La confirmación manual está al día."}
+                    </span>
+                  </div>
+                  <div className="insight-card">
+                    <strong>Automatizaciones</strong>
+                    <span>
+                      {dashboard.metrics.reviewsPending
+                        ? "Hay reseñas pendientes de disparar."
+                        : "No hay reseñas esperando envío."}
+                    </span>
+                  </div>
+                  <div className="insight-card">
+                    <strong>Canal</strong>
+                    <span>{dashboard.channel?.phoneE164 ?? "Configura el número dedicado del negocio."}</span>
+                  </div>
+                  <div className="insight-card">
+                    <strong>Última actividad</strong>
+                    <span>
+                      {dashboard.recentMessages[0]
+                        ? dateTimeLabel(dashboard.recentMessages[0].createdAt)
+                        : "Sin actividad reciente"}
+                    </span>
                   </div>
                 </div>
-                <div className="service-list">
-                  {dashboard.services.map((service) => (
-                    <ServiceCard key={service.id} service={service} />
-                  ))}
-                </div>
-                <div className="availability-grid">
-                  {dashboard.availabilityRules.map((rule) => (
-                    <div key={rule.id} className="rule-card">
-                      <strong>Día {rule.weekday}</strong>
-                      <span>
-                        {rule.start} - {rule.end}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              </section>
             </section>
           </>
         )}
@@ -429,32 +470,23 @@ function App() {
   );
 }
 
-function MetricCard({ label, value, accent }: { label: string; value: number; accent: string }) {
+function MetricCard({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
-    <div className={`metric-card ${accent}`}>
+    <article className={`metric-card ${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
+    </article>
   );
 }
 
 function MessageItem({ message, contactName }: { message: MessageLog; contactName: string }) {
   return (
     <article className={`message-item ${message.direction}`}>
-      <div>
+      <div className="message-main">
         <strong>{contactName}</strong>
         <p>{message.body}</p>
       </div>
-      <span>{timeLabel(message.createdAt)}</span>
-    </article>
-  );
-}
-
-function ServiceCard({ service }: { service: Service }) {
-  return (
-    <article className="service-card">
-      <strong>{service.name}</strong>
-      <span>{service.durationMinutes} min</span>
+      <span className="message-time">{dateTimeLabel(message.createdAt)}</span>
     </article>
   );
 }

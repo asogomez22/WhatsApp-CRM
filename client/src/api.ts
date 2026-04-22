@@ -41,13 +41,5 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
       })
-    ),
-  updateGoogleCalendar: async (businessId: string, body: { googleCalendarConnected: boolean; googleCalendarId: string }) =>
-    parseJson<Business>(
-      await fetch(`/api/businesses/${businessId}/google-calendar`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      })
     )
 };
