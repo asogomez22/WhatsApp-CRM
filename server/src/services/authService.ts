@@ -68,35 +68,42 @@ export class AuthService {
     }
 
     const hasUsers = await this.store.hasUsers();
-    const business = await this.store.createBusiness({
-      name: input.businessName,
-      email: input.email,
-      phone: input.phone,
-      city: input.city,
-      address: input.address,
-      timezone: "Europe/Madrid",
-      notes: "",
-      plan: input.plan,
-      planPriceMonthly: planPriceMap[input.plan],
-      googleReviewLink: input.googleReviewLink || DEFAULT_GOOGLE_REVIEW_LINK,
-      billingStatus: hasUsers ? "unconfigured" : "trial",
-      active: true
-    });
-
+    const existingBusinesses = await this.store.getBusinesses();
+    const shouldClaimExistingBusinesses = !hasUsers && existingBusinesses.length > 0;
     const role: UserRole = hasUsers ? "business_admin" : "platform_admin";
+
+    const businesses = shouldClaimExistingBusinesses
+      ? existingBusinesses
+      : [
+          await this.store.createBusiness({
+            name: input.businessName,
+            email: input.email,
+            phone: input.phone,
+            city: input.city,
+            address: input.address,
+            timezone: "Europe/Madrid",
+            notes: "",
+            plan: input.plan,
+            planPriceMonthly: planPriceMap[input.plan],
+            googleReviewLink: input.googleReviewLink || DEFAULT_GOOGLE_REVIEW_LINK,
+            billingStatus: hasUsers ? "unconfigured" : "trial",
+            active: true
+          })
+        ];
+
     const user = await this.store.createUser({
       email: input.email,
       name: input.name,
       passwordHash: hashPasswordSync(input.password),
       role,
-      businessIds: [business.id],
+      businessIds: businesses.map((business) => business.id),
       active: true
     });
 
     return {
       token: this.issueToken(user),
       user: this.sanitizeUser(user),
-      businesses: [business]
+      businesses
     };
   }
 }

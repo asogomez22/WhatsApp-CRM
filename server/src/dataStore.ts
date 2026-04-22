@@ -20,6 +20,12 @@ import { createSeedData } from "./seed.js";
 
 const DEFAULT_DB_PATH = fileURLToPath(new URL("../data/app-db.json", import.meta.url));
 const APP_STATE_KEY = "primary";
+const planPriceMap = {
+  reviews: 39,
+  anti_no_show: 49,
+  auto_appointments: 79,
+  full_pack: 99
+} as const;
 
 const clone = <T>(value: T): T => {
   if (value === undefined) {
@@ -65,7 +71,9 @@ export class DataStore {
       writeFileSync(this.dbPath, JSON.stringify(seed, null, 2));
       this.db = seed;
     } else {
-      this.db = JSON.parse(readFileSync(this.dbPath, "utf8")) as AppDatabase;
+      const raw = JSON.parse(readFileSync(this.dbPath, "utf8")) as Partial<AppDatabase>;
+      this.db = this.normalizeDb(raw);
+      writeFileSync(this.dbPath, JSON.stringify(this.db, null, 2));
     }
 
     this.readyPromise = Promise.resolve();
@@ -113,24 +121,75 @@ export class DataStore {
     await this.ensureReady();
 
     if (this.mode === "json-file") {
-      return this.db as AppDatabase;
+      return this.normalizeDb(this.db as AppDatabase);
     }
 
     const result = await this.pool?.query("SELECT payload FROM app_state WHERE id = $1", [APP_STATE_KEY]);
-    return (result?.rows[0]?.payload ?? createSeedData()) as AppDatabase;
+    return this.normalizeDb((result?.rows[0]?.payload ?? createSeedData()) as Partial<AppDatabase>);
   }
 
   private async persist(db: AppDatabase) {
+    const normalized = this.normalizeDb(db);
+
     if (this.mode === "json-file") {
-      this.db = db;
+      this.db = normalized;
       writeFileSync(this.dbPath, JSON.stringify(this.db, null, 2));
       return;
     }
 
     await this.pool?.query("UPDATE app_state SET payload = $2::jsonb, updated_at = NOW() WHERE id = $1", [
       APP_STATE_KEY,
-      JSON.stringify(db)
+      JSON.stringify(normalized)
     ]);
+  }
+
+  private normalizeDb(input: Partial<AppDatabase>) {
+    const nowIso = new Date().toISOString();
+
+    return {
+      businesses: (input.businesses ?? []).map((business) => ({
+        ...business,
+        timezone: business.timezone ?? "Europe/Madrid",
+        notes: business.notes ?? "",
+        planPriceMonthly: business.planPriceMonthly ?? planPriceMap[business.plan] ?? planPriceMap.reviews,
+        billingStatus: business.billingStatus ?? "unconfigured",
+        active: business.active ?? true,
+        updatedAt: business.updatedAt ?? business.createdAt ?? nowIso
+      })),
+      whatsappChannels: (input.whatsappChannels ?? []).map((channel) => ({
+        ...channel,
+        templateNames: channel.templateNames ?? [],
+        templatesReady: channel.templatesReady ?? false,
+        metaVerified: channel.metaVerified ?? false,
+        active: channel.active ?? true,
+        updatedAt: channel.updatedAt ?? channel.createdAt ?? nowIso
+      })),
+      users: (input.users ?? []).map((user) => ({
+        ...user,
+        businessIds: user.businessIds ?? [],
+        active: user.active ?? true,
+        updatedAt: user.updatedAt ?? user.createdAt ?? nowIso
+      })),
+      contacts: (input.contacts ?? []).map((contact) => ({
+        ...contact,
+        email: contact.email ?? undefined,
+        notes: contact.notes ?? "",
+        tags: contact.tags ?? [],
+        updatedAt: contact.updatedAt ?? contact.createdAt ?? nowIso
+      })),
+      services: (input.services ?? []).map((service) => ({
+        ...service,
+        active: service.active ?? true
+      })),
+      availabilityRules: input.availabilityRules ?? [],
+      appointments: (input.appointments ?? []).map((appointment) => ({
+        ...appointment,
+        source: appointment.source ?? "manual",
+        updatedAt: appointment.updatedAt ?? appointment.createdAt ?? nowIso
+      })),
+      messages: input.messages ?? [],
+      conversationStates: input.conversationStates ?? []
+    } satisfies AppDatabase;
   }
 
   private async read<T>(reader: (db: AppDatabase) => T) {

@@ -189,10 +189,13 @@ export const createApp = async () => {
   app.get(
     "/api/auth/bootstrap-state",
     asyncRoute(async (_req, res) => {
+      const hasUsers = await store.hasUsers();
+      const demoUser = hasUsers ? await store.findUserByEmail("demo@tarracowebs.es") : undefined;
+
       res.json({
-        hasUsers: await store.hasUsers(),
-        demoUser: "demo@tarracowebs.es",
-        demoPassword: "demo12345"
+        hasUsers,
+        demoUser: demoUser ? "demo@tarracowebs.es" : "",
+        demoPassword: demoUser ? "demo12345" : ""
       });
     })
   );
