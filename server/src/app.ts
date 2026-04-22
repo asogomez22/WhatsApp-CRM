@@ -5,7 +5,6 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { DataStore } from "./dataStore.js";
-import { GoogleCalendarService } from "./services/googleCalendarService.js";
 import { WhatsappService } from "./services/whatsappService.js";
 import { WorkflowEngine } from "./services/workflowEngine.js";
 
@@ -16,9 +15,7 @@ const businessSchema = z.object({
   city: z.string().min(2),
   plan: z.enum(["reviews", "anti_no_show", "auto_appointments", "full_pack"]),
   googleReviewLink: z.string().url(),
-  active: z.boolean().default(true),
-  googleCalendarConnected: z.boolean().default(false),
-  googleCalendarId: z.string().optional()
+  active: z.boolean().default(true)
 });
 
 const appointmentSchema = z.object({
@@ -63,19 +60,13 @@ const whatsappChannelSchema = z.object({
   active: z.boolean().default(true)
 });
 
-const googleCalendarSchema = z.object({
-  googleCalendarConnected: z.boolean(),
-  googleCalendarId: z.string().min(1)
-});
-
 export const createApp = () => {
   const app = express();
   const serverDir = dirname(fileURLToPath(import.meta.url));
   const clientDistDir = resolve(serverDir, "../../client/dist");
   const store = new DataStore();
-  const googleCalendar = new GoogleCalendarService();
   const whatsapp = new WhatsappService();
-  const workflows = new WorkflowEngine(store, whatsapp, googleCalendar);
+  const workflows = new WorkflowEngine(store, whatsapp);
 
   app.use(cors());
   app.use(express.json());
@@ -83,8 +74,7 @@ export const createApp = () => {
   app.get("/api/health", (_req, res) => {
     res.json({
       ok: true,
-      storage: "json-file",
-      googleCalendarReady: googleCalendar.isReady()
+      storage: "json-file"
     });
   });
 
@@ -134,17 +124,6 @@ export const createApp = () => {
       businessId: req.params.businessId,
       ...parsed.data
     });
-
-    const syncResult = await googleCalendar.syncAppointment({
-      appointment,
-      business,
-      contact,
-      service
-    });
-
-    if (syncResult.synced && syncResult.eventId) {
-      return res.status(201).json(store.updateAppointment(appointment.id, { googleCalendarEventId: syncResult.eventId }));
-    }
 
     return res.status(201).json(appointment);
   });
@@ -222,19 +201,6 @@ export const createApp = () => {
         ...parsed.data
       })
     );
-  });
-
-  app.put("/api/businesses/:businessId/google-calendar", (req, res) => {
-    const parsed = googleCalendarSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json(parsed.error.flatten());
-    }
-
-    const updated = store.updateBusiness(req.params.businessId, parsed.data);
-    if (!updated) {
-      return res.status(404).json({ message: "Negocio no encontrado" });
-    }
-    return res.json(updated);
   });
 
   app.post("/api/businesses/:businessId/automation/process-due", async (req, res) => {

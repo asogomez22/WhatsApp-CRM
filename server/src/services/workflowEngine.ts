@@ -1,5 +1,4 @@
 import { DataStore } from "../dataStore.js";
-import { GoogleCalendarService } from "./googleCalendarService.js";
 import { WhatsappService } from "./whatsappService.js";
 import { Appointment, Contact, Service } from "../types.js";
 
@@ -24,8 +23,7 @@ const fromMinutes = (date: string, minutes: number) => {
 export class WorkflowEngine {
   constructor(
     private readonly store: DataStore,
-    private readonly whatsapp: WhatsappService,
-    private readonly googleCalendar: GoogleCalendarService
+    private readonly whatsapp: WhatsappService
   ) {}
 
   private async sendAndLog(params: {
@@ -323,17 +321,6 @@ export class WorkflowEngine {
         status: "confirmed",
         source: "whatsapp"
       });
-
-      const syncResult = await this.googleCalendar.syncAppointment({
-        appointment,
-        business,
-        contact,
-        service
-      });
-
-      if (syncResult.synced && syncResult.eventId) {
-        this.store.updateAppointment(appointment.id, { googleCalendarEventId: syncResult.eventId });
-      }
 
       this.store.clearConversationState(businessId, contact.id);
       await this.sendAndLog({

@@ -11,8 +11,6 @@ export interface Business {
   googleReviewLink: string;
   active: boolean;
   createdAt: string;
-  googleCalendarConnected: boolean;
-  googleCalendarId?: string;
 }
 
 export interface Contact {
@@ -51,7 +49,6 @@ export interface Appointment {
   status: AppointmentStatus;
   source: "manual" | "whatsapp";
   notes?: string;
-  googleCalendarEventId?: string;
   reviewRequestedAt?: string;
   reminderSentAt?: string;
   createdAt: string;

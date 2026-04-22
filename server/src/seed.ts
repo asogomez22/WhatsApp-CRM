@@ -20,9 +20,7 @@ export const createSeedData = (): AppDatabase => ({
       plan: "full_pack",
       googleReviewLink: "https://g.page/r/clinica-sonrisa-review",
       active: true,
-      createdAt: now.toISOString(),
-      googleCalendarConnected: false,
-      googleCalendarId: "primary"
+      createdAt: now.toISOString()
     }
   ],
   whatsappChannels: [

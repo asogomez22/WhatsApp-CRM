@@ -10,7 +10,6 @@ Incluye:
 - Automatizaciones de reseñas y recordatorios anti no-show.
 - Flujo guiado de captación de citas por WhatsApp.
 - Webhook común de WhatsApp con enrutado por `phone_number_id`.
-- Preparación de sincronización con Google Calendar.
 
 ## Arquitectura
 
@@ -60,9 +59,6 @@ PORT=3001
 DATA_DIR=/app/data
 WHATSAPP_API_VERSION=v22.0
 WHATSAPP_ACCESS_TOKEN=
-GOOGLE_PROJECT_ID=
-GOOGLE_CLIENT_EMAIL=
-GOOGLE_PRIVATE_KEY=
 ```
 
 ### Persistencia
@@ -89,23 +85,6 @@ Se crea automáticamente un negocio piloto:
 - plan `full_pack`
 - canal demo de WhatsApp
 - servicios, disponibilidad y citas iniciales
-
-## Integración con Google Calendar
-
-La app ya guarda por negocio:
-
-- `googleCalendarConnected`
-- `googleCalendarId`
-
-Y el backend ya intenta sincronizar nuevas citas si existen estas variables:
-
-```bash
-GOOGLE_PROJECT_ID=
-GOOGLE_CLIENT_EMAIL=
-GOOGLE_PRIVATE_KEY=
-```
-
-En local, sin esas credenciales, la integración queda preparada pero no inserta eventos reales.
 
 ## Integración con WhatsApp Cloud API
 
