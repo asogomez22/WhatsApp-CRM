@@ -1,0 +1,23 @@
+services:
+  whatsapp-crm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: whatsapp-crm
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3001}:3001"
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "3001"
+      DATA_DIR: "/app/data"
+      WHATSAPP_API_VERSION: "${WHATSAPP_API_VERSION:-v22.0}"
+      WHATSAPP_ACCESS_TOKEN: "${WHATSAPP_ACCESS_TOKEN:-}"
+      GOOGLE_PROJECT_ID: "${GOOGLE_PROJECT_ID:-}"
+      GOOGLE_CLIENT_EMAIL: "${GOOGLE_CLIENT_EMAIL:-}"
+      GOOGLE_PRIVATE_KEY: "${GOOGLE_PRIVATE_KEY:-}"
+    volumes:
+      - whatsapp_crm_data:/app/data
+
+volumes:
+  whatsapp_crm_data:

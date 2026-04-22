@@ -1,0 +1,9 @@
+node_modules
+dist
+.DS_Store
+.env
+.env.*
+*.tsbuildinfo
+client/vite.config.js
+client/vite.config.d.ts
+server/data/app-db.json
