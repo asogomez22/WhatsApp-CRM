@@ -1,4 +1,5 @@
 import { AppDatabase } from "./types.js";
+import { hashPasswordSync } from "./utils/authCrypto.js";
 
 const now = new Date();
 const todayIso = now.toISOString().slice(0, 10);
@@ -13,14 +14,20 @@ export const createSeedData = (): AppDatabase => ({
   businesses: [
     {
       id: "biz-dental-reus",
-      name: "Clínica Sonrisa Reus",
+      name: "Clinica Sonrisa Reus",
       email: "hola@sonrisareus.es",
       phone: "+34977111222",
       city: "Reus",
+      address: "Carrer Major 12",
+      timezone: "Europe/Madrid",
+      notes: "Negocio piloto para onboarding y demos del MVP.",
       plan: "full_pack",
+      planPriceMonthly: 99,
       googleReviewLink: "https://g.page/r/clinica-sonrisa-review",
+      billingStatus: "trial",
       active: true,
-      createdAt: now.toISOString()
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
     }
   ],
   whatsappChannels: [
@@ -32,29 +39,61 @@ export const createSeedData = (): AppDatabase => ({
       wabaId: "waba-demo",
       accessTokenEncrypted: "demo-token",
       verifyToken: "verify-demo-token",
-      displayName: "Clínica Sonrisa Reus",
+      displayName: "Clinica Sonrisa Reus",
+      templateNames: ["appointment_reminder", "review_request"],
       templatesReady: true,
+      metaVerified: true,
       active: true,
-      createdAt: now.toISOString()
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    }
+  ],
+  users: [
+    {
+      id: "user-platform-demo",
+      email: "demo@tarracowebs.es",
+      name: "TarracoWebs Demo",
+      passwordHash: hashPasswordSync("demo12345"),
+      role: "platform_admin",
+      businessIds: ["biz-dental-reus"],
+      active: true,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      lastLoginAt: now.toISOString()
+    },
+    {
+      id: "user-clinic-demo",
+      email: "clinica@sonrisareus.es",
+      name: "Direccion Clinica",
+      passwordHash: hashPasswordSync("demo12345"),
+      role: "business_admin",
+      businessIds: ["biz-dental-reus"],
+      active: true,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
     }
   ],
   contacts: [
     {
       id: "contact-ana",
       businessId: "biz-dental-reus",
-      name: "Ana Pérez",
+      name: "Ana Perez",
       phone: "+34611122334",
-      tags: ["reseña", "seguimiento"],
+      email: "ana@example.com",
+      notes: "Paciente recurrente.",
+      tags: ["resena", "seguimiento"],
       createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
       lastInteractionAt: now.toISOString()
     },
     {
       id: "contact-luis",
       businessId: "biz-dental-reus",
-      name: "Luis Martín",
+      name: "Luis Martin",
       phone: "+34622233445",
       tags: ["nuevo"],
       createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
       lastInteractionAt: now.toISOString()
     }
   ],
@@ -76,7 +115,7 @@ export const createSeedData = (): AppDatabase => ({
     {
       id: "service-review",
       businessId: "biz-dental-reus",
-      name: "Revisión",
+      name: "Revision",
       durationMinutes: 20,
       active: true
     }

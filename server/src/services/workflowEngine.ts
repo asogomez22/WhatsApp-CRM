@@ -1,12 +1,12 @@
 import { DataStore } from "../dataStore.js";
 import { WhatsappService } from "./whatsappService.js";
-import { Appointment, Contact, Service } from "../types.js";
+import { Appointment, Business, Contact, Service } from "../types.js";
 
-const formatLocal = (iso: string) =>
+const formatLocal = (iso: string, timezone = "Europe/Madrid") =>
   new Intl.DateTimeFormat("es-ES", {
     dateStyle: "medium",
     timeStyle: "short",
-    timeZone: "UTC"
+    timeZone: timezone
   }).format(new Date(iso));
 
 const toMinutes = (time: string) => {
@@ -27,13 +27,13 @@ export class WorkflowEngine {
   ) {}
 
   private async sendAndLog(params: {
-    businessId: string;
+    business: Business;
     contact: Contact;
     body: string;
-    kind: "review_request" | "reminder" | "confirmation" | "assistant" | "human_handoff";
+    kind: "review_request" | "review_followup" | "reminder" | "confirmation" | "assistant" | "human_handoff";
     appointmentId?: string;
   }) {
-    const channel = this.store.getWhatsappChannelByBusinessId(params.businessId);
+    const channel = await this.store.getWhatsappChannelByBusinessId(params.business.id);
     if (!channel) {
       throw new Error("El negocio no tiene canal de WhatsApp configurado");
     }
@@ -45,8 +45,8 @@ export class WorkflowEngine {
       kind: params.kind
     });
 
-    this.store.logMessage({
-      businessId: params.businessId,
+    await this.store.logMessage({
+      businessId: params.business.id,
       contactId: params.contact.id,
       direction: "outgoing",
       kind: params.kind,
@@ -66,23 +66,16 @@ export class WorkflowEngine {
     return services.find((service) => normalized.includes(service.name.toLowerCase()));
   }
 
-  private getNextDateForWeekday(base: Date, weekday: number) {
-    const result = new Date(base);
-    const distance = (weekday - result.getUTCDay() + 7) % 7;
-    result.setUTCDate(result.getUTCDate() + distance);
-    return result;
-  }
-
-  getAvailableSlots(businessId: string, serviceId: string, limit = 3) {
-    const service = this.store.getService(serviceId);
+  async getAvailableSlots(businessId: string, serviceId: string, limit = 3) {
+    const service = await this.store.getService(serviceId);
     if (!service) {
       return [];
     }
 
-    const rules = this.store.getAvailabilityRules(businessId);
-    const appointments = this.store
-      .getAppointments(businessId)
-      .filter((appointment) => !["cancelled", "no_show"].includes(appointment.status));
+    const rules = await this.store.getAvailabilityRules(businessId);
+    const appointments = (await this.store.getAppointments(businessId)).filter(
+      (appointment) => !["cancelled", "no_show"].includes(appointment.status)
+    );
 
     const slots: string[] = [];
     const today = new Date();
@@ -93,7 +86,7 @@ export class WorkflowEngine {
       const weekday = cursor.getUTCDay();
       const date = cursor.toISOString().slice(0, 10);
 
-      for (const rule of rules.filter((value) => value.weekday === weekday)) {
+      for (const rule of rules.filter((value) => value.weekday === weekday).sort((a, b) => a.start.localeCompare(b.start))) {
         let current = toMinutes(rule.start);
         const end = toMinutes(rule.end);
 
@@ -122,48 +115,73 @@ export class WorkflowEngine {
   }
 
   async processDueAutomations(now = new Date()) {
-    const allBusinesses = this.store.getBusinesses().filter((business) => business.active);
+    const allBusinesses = (await this.store.getBusinesses()).filter((business) => business.active);
 
     for (const business of allBusinesses) {
-      const appointments = this.store.getAppointments(business.id);
+      await this.processDueAutomationsForBusiness(business.id, now, business);
+    }
+  }
 
-      for (const appointment of appointments) {
-        const contact = this.store.getContact(appointment.contactId);
-        const service = this.store.getService(appointment.serviceId);
-        if (!contact || !service) {
-          continue;
-        }
+  async processDueAutomationsForBusiness(businessId: string, now = new Date(), existingBusiness?: Business) {
+    const business = existingBusiness ?? (await this.store.getBusiness(businessId));
+    if (!business || !business.active) {
+      return;
+    }
 
-        const start = new Date(appointment.startAt).getTime();
-        const end = new Date(appointment.endAt).getTime();
-        const current = now.getTime();
+    const appointments = await this.store.getAppointments(business.id);
 
-        if (
-          ["scheduled", "confirmed"].includes(appointment.status) &&
-          !appointment.reminderSentAt &&
-          start - current <= 24 * 60 * 60 * 1000 &&
-          start - current > 0
-        ) {
-          await this.sendAndLog({
-            businessId: business.id,
-            contact,
-            body: `Recordatorio: tienes ${service.name} el ${formatLocal(appointment.startAt)}. Responde CONFIRMAR o CANCELAR.`,
-            kind: "reminder",
-            appointmentId: appointment.id
-          });
-          this.store.updateAppointment(appointment.id, { reminderSentAt: now.toISOString() });
-        }
+    for (const appointment of appointments) {
+      const contact = await this.store.getContact(appointment.contactId);
+      const service = await this.store.getService(appointment.serviceId);
+      if (!contact || !service) {
+        continue;
+      }
 
-        if (appointment.status === "completed" && !appointment.reviewRequestedAt && current - end >= 2 * 60 * 60 * 1000) {
-          await this.sendAndLog({
-            businessId: business.id,
-            contact,
-            body: `Gracias por tu visita a ${business.name}. ¿Nos dejas una reseña? ${business.googleReviewLink}`,
-            kind: "review_request",
-            appointmentId: appointment.id
-          });
-          this.store.updateAppointment(appointment.id, { reviewRequestedAt: now.toISOString() });
-        }
+      const start = new Date(appointment.startAt).getTime();
+      const end = new Date(appointment.endAt).getTime();
+      const current = now.getTime();
+
+      if (
+        ["scheduled", "confirmed"].includes(appointment.status) &&
+        !appointment.reminderSentAt &&
+        start - current <= 24 * 60 * 60 * 1000 &&
+        start - current > 0
+      ) {
+        await this.sendAndLog({
+          business,
+          contact,
+          body: `Recordatorio: tienes ${service.name} el ${formatLocal(appointment.startAt, business.timezone)}. Responde CONFIRMAR o CANCELAR.`,
+          kind: "reminder",
+          appointmentId: appointment.id
+        });
+        await this.store.updateAppointment(appointment.id, { reminderSentAt: now.toISOString() });
+      }
+
+      if (appointment.status === "completed" && !appointment.reviewRequestedAt && current - end >= 2 * 60 * 60 * 1000) {
+        await this.sendAndLog({
+          business,
+          contact,
+          body: `Gracias por tu visita a ${business.name}. Nos ayudas con una resena? ${business.googleReviewLink}`,
+          kind: "review_request",
+          appointmentId: appointment.id
+        });
+        await this.store.updateAppointment(appointment.id, { reviewRequestedAt: now.toISOString() });
+      }
+
+      if (
+        appointment.status === "completed" &&
+        appointment.reviewRequestedAt &&
+        !appointment.reviewReminderSentAt &&
+        current - end >= 24 * 60 * 60 * 1000
+      ) {
+        await this.sendAndLog({
+          business,
+          contact,
+          body: `Solo un recordatorio rapido: si tu experiencia fue buena, puedes dejar tu resena aqui ${business.googleReviewLink}`,
+          kind: "review_followup",
+          appointmentId: appointment.id
+        });
+        await this.store.updateAppointment(appointment.id, { reviewReminderSentAt: now.toISOString() });
       }
     }
   }
@@ -174,23 +192,24 @@ export class WorkflowEngine {
     text: string;
   }) {
     const { businessId, fromPhone, text } = params;
-    const business = this.store.getBusiness(businessId);
+    const business = await this.store.getBusiness(businessId);
     if (!business) {
       throw new Error("Negocio no encontrado");
     }
 
-    let contact = this.store.findContactByPhone(businessId, fromPhone);
+    let contact = await this.store.findContactByPhone(businessId, fromPhone);
     if (!contact) {
-      contact = this.store.createContact({
+      contact = await this.store.createContact({
         businessId,
         name: `Paciente ${fromPhone.slice(-4)}`,
         phone: fromPhone,
-        tags: ["lead"]
+        tags: ["lead", "nuevo"],
+        notes: "Lead creado automaticamente desde WhatsApp."
       });
     }
 
-    this.store.touchContact(contact.id);
-    this.store.logMessage({
+    await this.store.touchContact(contact.id);
+    await this.store.logMessage({
       businessId,
       contactId: contact.id,
       direction: "incoming",
@@ -199,20 +218,19 @@ export class WorkflowEngine {
     });
 
     const normalized = text.trim().toLowerCase();
-    const appointments = this.store
-      .getAppointments(businessId)
-      .filter((appointment) => appointment.contactId === contact.id)
+    const appointments = (await this.store.getAppointments(businessId))
+      .filter((appointment) => appointment.contactId === contact?.id)
       .sort((a, b) => a.startAt.localeCompare(b.startAt));
     const activeAppointment = appointments.find((appointment) =>
       ["scheduled", "confirmed", "pending"].includes(appointment.status)
     );
 
-    if (["confirmar", "confirmo", "sí", "si"].includes(normalized) && activeAppointment) {
-      this.store.updateAppointment(activeAppointment.id, { status: "confirmed" });
+    if (["confirmar", "confirmo", "si", "ok"].includes(normalized) && activeAppointment) {
+      await this.store.updateAppointment(activeAppointment.id, { status: "confirmed" });
       await this.sendAndLog({
-        businessId,
+        business,
         contact,
-        body: `Perfecto, tu cita del ${formatLocal(activeAppointment.startAt)} queda confirmada.`,
+        body: `Perfecto, tu cita del ${formatLocal(activeAppointment.startAt, business.timezone)} queda confirmada.`,
         kind: "confirmation",
         appointmentId: activeAppointment.id
       });
@@ -220,31 +238,31 @@ export class WorkflowEngine {
     }
 
     if (["cancelar", "cancelo"].includes(normalized) && activeAppointment) {
-      this.store.updateAppointment(activeAppointment.id, { status: "cancelled" });
+      await this.store.updateAppointment(activeAppointment.id, { status: "cancelled" });
       await this.sendAndLog({
-        businessId,
+        business,
         contact,
-        body: "Tu cita ha sido cancelada. Si quieres, puedo ofrecerte otra franja.",
+        body: "Tu cita ha sido cancelada. Si quieres, puedo ofrecerte otra franja o derivarte al equipo.",
         kind: "confirmation",
         appointmentId: activeAppointment.id
       });
       return { action: "appointment_cancelled" };
     }
 
-    const services = this.store.getServices(businessId);
-    const flow = this.store.getConversationState(businessId, contact.id);
+    const services = await this.store.getServices(businessId);
+    const flow = await this.store.getConversationState(businessId, contact.id);
 
     if (!flow && /(cita|appointment|reservar|visita|hueco)/i.test(normalized)) {
-      this.store.setConversationState({
+      await this.store.setConversationState({
         businessId,
         contactId: contact.id,
         step: "choose_service"
       });
       const options = services.map((service, index) => `${index + 1}. ${service.name}`).join("\n");
       await this.sendAndLog({
-        businessId,
+        business,
         contact,
-        body: `Claro. Indica el servicio respondiendo con el número:\n${options}`,
+        body: `Claro. Indica el servicio respondiendo con el numero:\n${options}`,
         kind: "assistant"
       });
       return { action: "service_prompted" };
@@ -254,32 +272,32 @@ export class WorkflowEngine {
       const service = this.matchService(normalized, services);
       if (!service) {
         await this.sendAndLog({
-          businessId,
+          business,
           contact,
-          body: "No he reconocido el servicio. Responde con 1, 2 o 3 según la opción que prefieras.",
+          body: "No he reconocido el servicio. Responde con 1, 2 o 3 segun la opcion que prefieras.",
           kind: "assistant"
         });
         return { action: "service_retry" };
       }
 
-      const offeredSlots = this.getAvailableSlots(businessId, service.id, 3);
+      const offeredSlots = await this.getAvailableSlots(businessId, service.id, 3);
       if (!offeredSlots.length) {
-        this.store.setConversationState({
+        await this.store.setConversationState({
           businessId,
           contactId: contact.id,
           step: "handoff",
           selectedServiceId: service.id
         });
         await this.sendAndLog({
-          businessId,
+          business,
           contact,
-          body: "No encuentro huecos automáticos ahora mismo. Te deriva una persona del equipo.",
+          body: "No encuentro huecos automaticos ahora mismo. Te deriva una persona del equipo.",
           kind: "human_handoff"
         });
         return { action: "handoff_no_slots" };
       }
 
-      this.store.setConversationState({
+      await this.store.setConversationState({
         businessId,
         contactId: contact.id,
         step: "choose_slot",
@@ -287,9 +305,9 @@ export class WorkflowEngine {
         offeredSlots
       });
 
-      const options = offeredSlots.map((slot, index) => `${index + 1}. ${formatLocal(slot)}`).join("\n");
+      const options = offeredSlots.map((slot, index) => `${index + 1}. ${formatLocal(slot, business.timezone)}`).join("\n");
       await this.sendAndLog({
-        businessId,
+        business,
         contact,
         body: `Estos son los siguientes huecos para ${service.name}:\n${options}\nResponde con 1, 2 o 3.`,
         kind: "assistant"
@@ -300,11 +318,11 @@ export class WorkflowEngine {
     if (flow?.step === "choose_slot" && flow.selectedServiceId && flow.offeredSlots?.length) {
       const choice = Number(normalized);
       const slot = Number.isNaN(choice) ? undefined : flow.offeredSlots[choice - 1];
-      const service = this.store.getService(flow.selectedServiceId);
+      const service = await this.store.getService(flow.selectedServiceId);
 
       if (!slot || !service) {
         await this.sendAndLog({
-          businessId,
+          business,
           contact,
           body: "No he entendido el hueco elegido. Responde con 1, 2 o 3.",
           kind: "assistant"
@@ -312,7 +330,7 @@ export class WorkflowEngine {
         return { action: "slot_retry" };
       }
 
-      const appointment = this.store.createAppointment({
+      const appointment = await this.store.createAppointment({
         businessId,
         contactId: contact.id,
         serviceId: service.id,
@@ -322,21 +340,31 @@ export class WorkflowEngine {
         source: "whatsapp"
       });
 
-      this.store.clearConversationState(businessId, contact.id);
+      await this.store.clearConversationState(businessId, contact.id);
       await this.sendAndLog({
-        businessId,
+        business,
         contact,
-        body: `Tu cita para ${service.name} queda reservada el ${formatLocal(slot)}.`,
+        body: `Tu cita para ${service.name} queda reservada el ${formatLocal(slot, business.timezone)}.`,
         kind: "confirmation",
         appointmentId: appointment.id
       });
       return { action: "appointment_created", appointmentId: appointment.id };
     }
 
+    if (flow?.step === "handoff") {
+      await this.sendAndLog({
+        business,
+        contact,
+        body: "He dejado tu mensaje marcado para seguimiento manual. El equipo te respondera cuanto antes.",
+        kind: "human_handoff"
+      });
+      return { action: "handoff_pending" };
+    }
+
     await this.sendAndLog({
-      businessId,
+      business,
       contact,
-      body: "Puedo ayudarte a pedir cita. Escribe “quiero cita” y te guío paso a paso.",
+      body: "Puedo ayudarte a pedir cita. Escribe \"quiero cita\" y te guio paso a paso.",
       kind: "assistant"
     });
     return { action: "fallback_prompted" };
