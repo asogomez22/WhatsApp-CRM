@@ -201,6 +201,13 @@ export const createApp = async () => {
   );
 
   app.post(
+    "/api/auth/auto-login",
+    asyncRoute(async (_req, res) => {
+      return res.json(await auth.autoLogin());
+    })
+  );
+
+  app.post(
     "/api/auth/register",
     asyncRoute(async (req, res) => {
       const parsed = registerSchema.safeParse(req.body);

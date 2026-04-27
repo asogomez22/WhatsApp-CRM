@@ -5,7 +5,6 @@ import {
   AppointmentStatus,
   AuthSession,
   BillingStatus,
-  BootstrapState,
   Business,
   DashboardSummary,
   MessageLog,
@@ -45,18 +44,6 @@ const billingLabel: Record<BillingStatus, string> = {
   trial: "Trial",
   active: "Activo",
   past_due: "Pendiente"
-};
-
-const defaultRegisterForm = {
-  name: "",
-  email: "",
-  password: "",
-  businessName: "",
-  phone: "",
-  city: "",
-  address: "",
-  plan: "full_pack" as PlanCode,
-  googleReviewLink: ""
 };
 
 const defaultBusinessForm = {
@@ -118,22 +105,15 @@ const normalizeTags = (value: string) =>
     .filter(Boolean);
 
 function App() {
-  const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
   const [session, setSession] = useState<{ user: SessionUser; businesses: Business[] } | null>(null);
   const [appLoading, setAppLoading] = useState(true);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [selectedBusinessId, setSelectedBusinessId] = useState("");
   const [view, setView] = useState<ViewId>("overview");
   const [date, setDate] = useState(today);
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
-  const [loginForm, setLoginForm] = useState({
-    email: "",
-    password: ""
-  });
-  const [registerForm, setRegisterForm] = useState(defaultRegisterForm);
   const [businessForm, setBusinessForm] = useState(defaultBusinessForm);
   const [channelForm, setChannelForm] = useState(defaultChannelForm);
   const [newBusinessForm, setNewBusinessForm] = useState({
@@ -170,32 +150,56 @@ function App() {
     defaultAvailabilityRule
   ]);
 
+  const applySession = (nextSession: AuthSession) => {
+    api.setToken(nextSession.token);
+    setSession({
+      user: nextSession.user,
+      businesses: nextSession.businesses
+    });
+    setSelectedBusinessId(nextSession.businesses[0]?.id || "");
+    setDashboard(null);
+    setPageError(null);
+    setNotice(null);
+  };
+
   useEffect(() => {
     let cancelled = false;
 
     const loadApp = async () => {
       setAppLoading(true);
       try {
-        const bootstrapState = await api.getBootstrapState();
-        if (!cancelled) {
-          setBootstrap(bootstrapState);
+        let currentSession:
+          | {
+              user: SessionUser;
+              businesses: Business[];
+            }
+          | AuthSession;
+
+        if (api.getToken()) {
+          try {
+            currentSession = await api.getSession();
+          } catch {
+            api.setToken("");
+            currentSession = await api.autoLogin();
+          }
+        } else {
+          currentSession = await api.autoLogin();
         }
 
-        if (!api.getToken()) {
-          return;
-        }
-
-        const currentSession = await api.getSession();
         if (cancelled) {
           return;
         }
 
-        setSession(currentSession);
-        setSelectedBusinessId((current) => current || currentSession.businesses[0]?.id || "");
+        applySession({
+          token: "token" in currentSession ? currentSession.token : api.getToken(),
+          user: currentSession.user,
+          businesses: currentSession.businesses
+        });
       } catch (error) {
         api.setToken("");
         if (!cancelled) {
-          setPageError(error instanceof Error ? error.message : "No se pudo iniciar la aplicacion");
+          setSession(null);
+          setPageError(error instanceof Error ? error.message : "No se pudo abrir el dashboard");
         }
       } finally {
         if (!cancelled) {
@@ -349,49 +353,6 @@ function App() {
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "No se pudo completar la accion");
     }
-  };
-
-  const applySession = (nextSession: AuthSession) => {
-    api.setToken(nextSession.token);
-    setSession({
-      user: nextSession.user,
-      businesses: nextSession.businesses
-    });
-    setSelectedBusinessId(nextSession.businesses[0]?.id || "");
-    setDashboard(null);
-    setPageError(null);
-    setNotice(null);
-  };
-
-  const submitLogin = async (event: FormEvent) => {
-    event.preventDefault();
-
-    await performAction(async () => {
-      const authSession = await api.login(loginForm);
-      applySession(authSession);
-    });
-  };
-
-  const submitRegister = async (event: FormEvent) => {
-    event.preventDefault();
-
-    await performAction(async () => {
-      const authSession = await api.register({
-        ...registerForm,
-        address: registerForm.address || undefined,
-        googleReviewLink: registerForm.googleReviewLink || undefined
-      });
-      applySession(authSession);
-    });
-  };
-
-  const logout = () => {
-    api.setToken("");
-    setSession(null);
-    setDashboard(null);
-    setSelectedBusinessId("");
-    setPageError(null);
-    setNotice(null);
   };
 
   const submitAppointment = async (event: FormEvent) => {
@@ -615,163 +576,18 @@ function App() {
         <section className="auth-stage">
           <div className="auth-copy">
             <p className="eyebrow">TarracoWebs · WhatsApp CRM</p>
-            <h1>Un dashboard mas serio para agenda, onboarding y captacion por WhatsApp.</h1>
+            <h1>Acceso directo al dashboard.</h1>
             <p className="muted">
-              Esta version ya incluye auth con JWT, aislamiento real por negocio, onboarding visible, billing preparado y
-              un panel pensado para operar el dia a dia sin perder contexto.
+              El acceso se abre automaticamente sin formulario de login. Si la sesion automatica falla, puedes
+              reintentar desde aqui.
             </p>
-            {bootstrap && (
-              <div className="demo-card">
-                <strong>Demo lista</strong>
-                <span>
-                  Usuario: {bootstrap.demoUser} · Password: {bootstrap.demoPassword}
-                </span>
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() =>
-                    setLoginForm({
-                      email: bootstrap.demoUser,
-                      password: bootstrap.demoPassword
-                    })
-                  }
-                >
-                  Rellenar credenciales demo
-                </button>
-              </div>
-            )}
           </div>
 
           <div className="auth-panel">
-            <div className="auth-switch">
-              <button
-                className={authMode === "login" ? "primary" : "secondary"}
-                type="button"
-                onClick={() => setAuthMode("login")}
-              >
-                Entrar
-              </button>
-              <button
-                className={authMode === "register" ? "primary" : "secondary"}
-                type="button"
-                onClick={() => setAuthMode("register")}
-              >
-                Alta inicial
-              </button>
-            </div>
-
             {pageError && <div className="error-banner">{pageError}</div>}
-
-            {authMode === "login" ? (
-              <form className="auth-form" onSubmit={submitLogin}>
-                <label className="field">
-                  <span>Email</span>
-                  <input
-                    type="email"
-                    value={loginForm.email}
-                    onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Password</span>
-                  <input
-                    type="password"
-                    value={loginForm.password}
-                    onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
-                  />
-                </label>
-                <button className="primary" type="submit">
-                  Entrar al panel
-                </button>
-              </form>
-            ) : (
-              <form className="auth-form" onSubmit={submitRegister}>
-                <label className="field">
-                  <span>Tu nombre</span>
-                  <input
-                    value={registerForm.name}
-                    onChange={(event) => setRegisterForm((current) => ({ ...current, name: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Email</span>
-                  <input
-                    type="email"
-                    value={registerForm.email}
-                    onChange={(event) => setRegisterForm((current) => ({ ...current, email: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Password</span>
-                  <input
-                    type="password"
-                    value={registerForm.password}
-                    onChange={(event) => setRegisterForm((current) => ({ ...current, password: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Negocio</span>
-                  <input
-                    value={registerForm.businessName}
-                    onChange={(event) =>
-                      setRegisterForm((current) => ({ ...current, businessName: event.target.value }))
-                    }
-                  />
-                </label>
-                <div className="inline-grid">
-                  <label className="field">
-                    <span>Telefono</span>
-                    <input
-                      value={registerForm.phone}
-                      onChange={(event) => setRegisterForm((current) => ({ ...current, phone: event.target.value }))}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Ciudad</span>
-                    <input
-                      value={registerForm.city}
-                      onChange={(event) => setRegisterForm((current) => ({ ...current, city: event.target.value }))}
-                    />
-                  </label>
-                </div>
-                <label className="field">
-                  <span>Direccion</span>
-                  <input
-                    value={registerForm.address}
-                    onChange={(event) => setRegisterForm((current) => ({ ...current, address: event.target.value }))}
-                  />
-                </label>
-                <div className="inline-grid">
-                  <label className="field">
-                    <span>Plan</span>
-                    <select
-                      value={registerForm.plan}
-                      onChange={(event) =>
-                        setRegisterForm((current) => ({ ...current, plan: event.target.value as PlanCode }))
-                      }
-                    >
-                      {Object.entries(planLabel).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Google review link</span>
-                    <input
-                      value={registerForm.googleReviewLink}
-                      onChange={(event) =>
-                        setRegisterForm((current) => ({ ...current, googleReviewLink: event.target.value }))
-                      }
-                    />
-                  </label>
-                </div>
-                <button className="primary" type="submit">
-                  Crear negocio y acceder
-                </button>
-              </form>
-            )}
+            <button className="primary" type="button" onClick={() => window.location.reload()}>
+              Reintentar acceso
+            </button>
           </div>
         </section>
       </div>
@@ -813,14 +629,12 @@ function App() {
           </nav>
 
           <div className="profile-card">
-            <span className="eyebrow">Sesion</span>
+            <span className="eyebrow">Acceso</span>
             <strong>{session.user.name}</strong>
             <span className="muted">
               {session.user.role} · {session.user.email}
             </span>
-            <button className="secondary" type="button" onClick={logout}>
-              Cerrar sesion
-            </button>
+            <span className="muted">Dashboard abierto sin login manual.</span>
           </div>
 
           <div className="rail-note">

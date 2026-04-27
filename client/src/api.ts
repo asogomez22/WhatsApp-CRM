@@ -65,6 +65,12 @@ class ApiClient {
     return this.request<BootstrapState>("/api/auth/bootstrap-state");
   }
 
+  autoLogin() {
+    return this.request<AuthSession>("/api/auth/auto-login", {
+      method: "POST"
+    });
+  }
+
   login(body: { email: string; password: string }) {
     return this.request<AuthSession>("/api/auth/login", {
       method: "POST",
