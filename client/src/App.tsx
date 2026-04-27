@@ -16,10 +16,10 @@ const today = new Date().toISOString().slice(0, 10);
 const weekdayLabel = ["Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"];
 const calendarHours = Array.from({ length: 12 }, (_, index) => index + 8);
 const viewTabs = [
-  { id: "overview", label: "Overview", icon: "space_dashboard" },
-  { id: "agenda", label: "Calendar", icon: "calendar_month" },
+  { id: "overview", label: "Panel", icon: "space_dashboard" },
+  { id: "agenda", label: "Agenda", icon: "calendar_month" },
   { id: "inbox", label: "Inbox", icon: "chat" },
-  { id: "setup", label: "Automation", icon: "auto_awesome" }
+  { id: "setup", label: "Automatizaciones", icon: "auto_awesome" }
 ] as const;
 
 type ViewId = (typeof viewTabs)[number]["id"];
@@ -109,6 +109,25 @@ const defaultAvailabilityRule = {
   end: "14:00"
 };
 
+const addDays = (isoDate: string, days: number) => {
+  const value = new Date(`${isoDate}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+};
+
+const getWeekDates = (isoDate: string) => {
+  const selected = new Date(`${isoDate}T00:00:00.000Z`);
+  const mondayOffset = (selected.getUTCDay() + 6) % 7;
+  const monday = new Date(selected);
+  monday.setUTCDate(selected.getUTCDate() - mondayOffset);
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setUTCDate(monday.getUTCDate() + index);
+    return date.toISOString().slice(0, 10);
+  });
+};
+
 const moneyLabel = (amount: number) =>
   new Intl.NumberFormat("es-ES", {
     style: "currency",
@@ -134,6 +153,12 @@ const dateLabel = (isoDate: string) =>
     weekday: "long",
     day: "numeric",
     month: "long"
+  }).format(new Date(`${isoDate}T00:00:00.000Z`));
+
+const shortDateLabel = (isoDate: string) =>
+  new Intl.DateTimeFormat("es-ES", {
+    day: "numeric",
+    month: "short"
   }).format(new Date(`${isoDate}T00:00:00.000Z`));
 
 const getCalendarPosition = (appointment: Appointment) => {
@@ -396,6 +421,7 @@ function App() {
   const nextAppointment = dashboard?.appointments.find((appointment) =>
     ["pending", "scheduled", "confirmed"].includes(appointment.status)
   );
+  const selectedWeek = useMemo(() => getWeekDates(date), [date]);
 
   const performAction = async (task: () => Promise<void>, successMessage?: string) => {
     setPageError(null);
@@ -692,8 +718,19 @@ function App() {
       </aside>
 
       <header className="app-topbar">
-        <div className="topbar-title">SchedulerPro</div>
+        <div className="topbar-title">TarracoWebs CRM</div>
         <div className="topbar-actions">
+          <div className="date-nav" aria-label="Navegacion de fecha">
+            <button className="icon-button" type="button" onClick={() => setDate((current) => addDays(current, -1))}>
+              <span className="material-symbols-outlined">chevron_left</span>
+            </button>
+            <button className="ghost-button today-button" type="button" onClick={() => setDate(today)}>
+              Hoy
+            </button>
+            <button className="icon-button" type="button" onClick={() => setDate((current) => addDays(current, 1))}>
+              <span className="material-symbols-outlined">chevron_right</span>
+            </button>
+          </div>
           <label className="field topbar-field">
             <span>Negocio</span>
             <select value={selectedBusinessId} onChange={(event) => setSelectedBusinessId(event.target.value)}>
@@ -870,14 +907,18 @@ function App() {
                     </div>
 
                     <div className="message-stack">
-                      {dashboard.recentMessages.slice(0, 6).map((message) => (
-                        <MessageRow
-                          key={message.id}
-                          message={message}
-                          contactName={contactsById.get(message.contactId)?.name || "Paciente"}
-                          timezone={dashboard.business.timezone}
-                        />
-                      ))}
+                      {dashboard.recentMessages.length ? (
+                        dashboard.recentMessages.slice(0, 6).map((message) => (
+                          <MessageRow
+                            key={message.id}
+                            message={message}
+                            contactName={contactsById.get(message.contactId)?.name || "Paciente"}
+                            timezone={dashboard.business.timezone}
+                          />
+                        ))
+                      ) : (
+                        <EmptyState icon="forum" title="Sin mensajes recientes" detail="La actividad de WhatsApp aparecera aqui." />
+                      )}
                     </div>
                   </section>
                 </section>
@@ -896,6 +937,8 @@ function App() {
                       {dashboard.metrics.completedAppointments} completadas · {dashboard.metrics.noShows} no-show
                     </span>
                   </div>
+
+                  <WeekStrip selectedDate={date} weekDates={selectedWeek} onSelectDate={setDate} />
 
                   <CalendarDay
                     appointments={dashboard.appointments}
@@ -1068,14 +1111,18 @@ function App() {
                   </form>
 
                   <div className="message-stack">
-                    {dashboard.recentMessages.map((message) => (
-                      <MessageRow
-                        key={message.id}
-                        message={message}
-                        contactName={contactsById.get(message.contactId)?.name || "Paciente"}
-                        timezone={dashboard.business.timezone}
-                      />
-                    ))}
+                    {dashboard.recentMessages.length ? (
+                      dashboard.recentMessages.map((message) => (
+                        <MessageRow
+                          key={message.id}
+                          message={message}
+                          contactName={contactsById.get(message.contactId)?.name || "Paciente"}
+                          timezone={dashboard.business.timezone}
+                        />
+                      ))
+                    ) : (
+                      <EmptyState icon="forum" title="Sin conversaciones" detail="Ejecuta una simulacion o espera nuevos mensajes del canal." />
+                    )}
                   </div>
                 </section>
 
@@ -1642,6 +1689,32 @@ function MetricCard({
   );
 }
 
+function WeekStrip({
+  selectedDate,
+  weekDates,
+  onSelectDate
+}: {
+  selectedDate: string;
+  weekDates: string[];
+  onSelectDate: (date: string) => void;
+}) {
+  return (
+    <div className="week-strip">
+      {weekDates.map((item) => (
+        <button
+          key={item}
+          className={item === selectedDate ? "week-day active" : "week-day"}
+          type="button"
+          onClick={() => onSelectDate(item)}
+        >
+          <span>{weekdayLabel[new Date(`${item}T00:00:00.000Z`).getUTCDay()]}</span>
+          <strong>{shortDateLabel(item)}</strong>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function CalendarDay({
   appointments,
   contactsById,
@@ -1667,14 +1740,22 @@ function CalendarDay({
           {calendarHours.map((hour) => (
             <div key={hour} className="calendar-hour-line" />
           ))}
-          {appointments.map((appointment) => (
-            <article key={appointment.id} className={`calendar-event ${appointment.status}`} style={getCalendarPosition(appointment)}>
-              <strong>{contactsById.get(appointment.contactId)?.name || "Paciente"}</strong>
-              <span>
-                {timeLabel(appointment.startAt, timezone)} · {servicesById.get(appointment.serviceId)?.name || "Servicio"}
-              </span>
-            </article>
-          ))}
+          {appointments.length ? (
+            appointments.map((appointment) => (
+              <article key={appointment.id} className={`calendar-event ${appointment.status}`} style={getCalendarPosition(appointment)}>
+                <strong>{contactsById.get(appointment.contactId)?.name || "Paciente"}</strong>
+                <span>
+                  {timeLabel(appointment.startAt, timezone)} · {servicesById.get(appointment.serviceId)?.name || "Servicio"}
+                </span>
+              </article>
+            ))
+          ) : (
+            <div className="calendar-empty">
+              <span className="material-symbols-outlined">event_available</span>
+              <strong>Agenda despejada</strong>
+              <p>No hay citas para este dia.</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1702,6 +1783,16 @@ function CalendarDay({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, detail }: { icon: string; title: string; detail: string }) {
+  return (
+    <div className="empty-state">
+      <span className="material-symbols-outlined">{icon}</span>
+      <strong>{title}</strong>
+      <p>{detail}</p>
     </div>
   );
 }
