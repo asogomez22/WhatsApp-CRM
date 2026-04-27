@@ -14,6 +14,7 @@ import {
 
 const today = new Date().toISOString().slice(0, 10);
 const weekdayLabel = ["Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"];
+const calendarHours = Array.from({ length: 12 }, (_, index) => index + 8);
 const viewTabs = [
   { id: "overview", label: "Overview", icon: "space_dashboard" },
   { id: "agenda", label: "Calendar", icon: "calendar_month" },
@@ -29,32 +30,27 @@ const viewMeta: Record<
     eyebrow: string;
     title: string;
     description: string;
-    actionLabel: string;
   }
 > = {
   overview: {
     eyebrow: "Dashboard operativo",
     title: "Vista general",
-    description: "Salud del negocio, onboarding, actividad y automatizaciones visibles en una sola capa operativa.",
-    actionLabel: "Procesar automatizaciones"
+    description: "Salud del negocio, onboarding, actividad y automatizaciones visibles en una sola capa operativa."
   },
   agenda: {
     eyebrow: "Calendar",
     title: "Agenda diaria",
-    description: "Control de citas, altas manuales y captacion en un layout compacto y de lectura rapida.",
-    actionLabel: "Procesar automatizaciones"
+    description: "Control de citas, altas manuales y captacion en un layout compacto y de lectura rapida."
   },
   inbox: {
     eyebrow: "Inbox",
     title: "Mensajeria y flujos",
-    description: "Actividad reciente, simulacion de WhatsApp y visibilidad del equipo que opera el canal.",
-    actionLabel: "Ejecutar automatizaciones"
+    description: "Actividad reciente, simulacion de WhatsApp y visibilidad del equipo que opera el canal."
   },
   setup: {
     eyebrow: "Automation Settings",
     title: "Configuracion y readiness",
-    description: "Canal, resenas, billing, catalogo y disponibilidad presentados con la misma logica de cards del mock.",
-    actionLabel: "Guardar setup"
+    description: "Canal, resenas, billing, catalogo y disponibilidad presentados con la misma logica de cards del mock."
   }
 };
 
@@ -132,6 +128,30 @@ const dateTimeLabel = (iso: string, timezone = "Europe/Madrid") =>
     timeStyle: "short",
     timeZone: timezone
   }).format(new Date(iso));
+
+const dateLabel = (isoDate: string) =>
+  new Intl.DateTimeFormat("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    month: "long"
+  }).format(new Date(`${isoDate}T00:00:00.000Z`));
+
+const getCalendarPosition = (appointment: Appointment) => {
+  const start = new Date(appointment.startAt);
+  const end = new Date(appointment.endAt);
+  const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
+  const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
+  const calendarStart = 8 * 60;
+  const calendarEnd = 20 * 60;
+  const totalMinutes = calendarEnd - calendarStart;
+  const top = Math.max(0, ((startMinutes - calendarStart) / totalMinutes) * 100);
+  const height = Math.max(7, ((Math.min(endMinutes, calendarEnd) - Math.max(startMinutes, calendarStart)) / totalMinutes) * 100);
+
+  return {
+    top: `${top}%`,
+    height: `${height}%`
+  };
+};
 
 const normalizeTags = (value: string) =>
   value
@@ -641,11 +661,6 @@ function App() {
           </div>
         </div>
 
-        <button className="primary sidebar-cta" type="button" onClick={() => setView("agenda")}>
-          <span className="material-symbols-outlined">add</span>
-          Nueva cita
-        </button>
-
         <nav className="sidebar-nav">
           {viewTabs.map((tab) => (
             <button
@@ -693,12 +708,6 @@ function App() {
             <span>Fecha</span>
             <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
           </label>
-          <button className="icon-button" type="button">
-            <span className="material-symbols-outlined">notifications</span>
-          </button>
-          <button className="icon-button" type="button">
-            <span className="material-symbols-outlined">help</span>
-          </button>
           <div className="avatar-chip">{session.user.name.slice(0, 1)}</div>
         </div>
       </header>
@@ -710,13 +719,10 @@ function App() {
             <h1>{activeView.title}</h1>
             <p className="page-description">{activeView.description}</p>
           </div>
-          <div className="page-actions">
-            <button className="secondary" type="button" onClick={() => void runAutomations()}>
-              {activeView.actionLabel}
-            </button>
-            <button className="ghost-button" type="button" onClick={() => void openBillingLink("portal")}>
-              Billing portal
-            </button>
+          <div className="page-meta">
+            <span>{selectedBusiness ? planLabel[selectedBusiness.plan] : "Sin plan"}</span>
+            <span>{selectedBusiness ? moneyLabel(selectedBusiness.planPriceMonthly) : "--"}</span>
+            <span>{dashboard ? billingLabel[dashboard.billing.status] : "Cargando"}</span>
           </div>
         </section>
 
@@ -884,29 +890,20 @@ function App() {
                   <div className="section-head">
                     <div>
                       <p className="eyebrow">Agenda del dia</p>
-                      <h3>Citas y estados</h3>
+                      <h3>{dateLabel(date)}</h3>
                     </div>
                     <span className="muted">
                       {dashboard.metrics.completedAppointments} completadas · {dashboard.metrics.noShows} no-show
                     </span>
                   </div>
 
-                  <div className="stack-list">
-                    {dashboard.appointments.length ? (
-                      dashboard.appointments.map((appointment) => (
-                        <AppointmentRow
-                          key={appointment.id}
-                          appointment={appointment}
-                          contactName={contactsById.get(appointment.contactId)?.name || "Paciente"}
-                          serviceName={servicesById.get(appointment.serviceId)?.name || "Servicio"}
-                          timezone={dashboard.business.timezone}
-                          onStatusChange={updateStatus}
-                        />
-                      ))
-                    ) : (
-                      <div className="empty-card">No hay citas para esta fecha.</div>
-                    )}
-                  </div>
+                  <CalendarDay
+                    appointments={dashboard.appointments}
+                    contactsById={contactsById}
+                    servicesById={servicesById}
+                    timezone={dashboard.business.timezone}
+                    onStatusChange={updateStatus}
+                  />
                 </section>
 
                 <div className="dashboard-span-4 side-stack">
@@ -1019,6 +1016,20 @@ function App() {
                         Guardar contacto
                       </button>
                     </form>
+                  </section>
+
+                  <section className="surface-card">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Resumen</p>
+                        <h3>Estado del dia</h3>
+                      </div>
+                    </div>
+                    <div className="mini-stats agenda-mini-stats">
+                      <MiniStat label="Citas" value={String(dashboard.metrics.todayAppointments)} />
+                      <MiniStat label="Confirmar" value={String(dashboard.metrics.pendingConfirmations)} />
+                      <MiniStat label="Completadas" value={String(dashboard.metrics.completedAppointments)} />
+                    </div>
                   </section>
                 </div>
               </section>
@@ -1628,6 +1639,70 @@ function MetricCard({
       <strong>{value}</strong>
       <p>{description}</p>
     </article>
+  );
+}
+
+function CalendarDay({
+  appointments,
+  contactsById,
+  servicesById,
+  timezone,
+  onStatusChange
+}: {
+  appointments: Appointment[];
+  contactsById: Map<string, DashboardSummary["contacts"][number]>;
+  servicesById: Map<string, DashboardSummary["services"][number]>;
+  timezone: string;
+  onStatusChange: (appointmentId: string, status: AppointmentStatus) => Promise<void>;
+}) {
+  return (
+    <div className="calendar-section">
+      <div className="calendar-day">
+        <div className="calendar-time-axis">
+          {calendarHours.map((hour) => (
+            <span key={hour}>{String(hour).padStart(2, "0")}:00</span>
+          ))}
+        </div>
+        <div className="calendar-track">
+          {calendarHours.map((hour) => (
+            <div key={hour} className="calendar-hour-line" />
+          ))}
+          {appointments.map((appointment) => (
+            <article key={appointment.id} className={`calendar-event ${appointment.status}`} style={getCalendarPosition(appointment)}>
+              <strong>{contactsById.get(appointment.contactId)?.name || "Paciente"}</strong>
+              <span>
+                {timeLabel(appointment.startAt, timezone)} · {servicesById.get(appointment.serviceId)?.name || "Servicio"}
+              </span>
+            </article>
+          ))}
+        </div>
+      </div>
+
+      <div className="calendar-list">
+        <div className="section-head compact-head">
+          <div>
+            <p className="eyebrow">Lista operativa</p>
+            <h3>Cambios de estado</h3>
+          </div>
+        </div>
+        <div className="stack-list">
+          {appointments.length ? (
+            appointments.map((appointment) => (
+              <AppointmentRow
+                key={appointment.id}
+                appointment={appointment}
+                contactName={contactsById.get(appointment.contactId)?.name || "Paciente"}
+                serviceName={servicesById.get(appointment.serviceId)?.name || "Servicio"}
+                timezone={timezone}
+                onStatusChange={onStatusChange}
+              />
+            ))
+          ) : (
+            <div className="empty-card">No hay citas para esta fecha.</div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

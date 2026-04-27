@@ -3,9 +3,9 @@
   font-family: "Inter", sans-serif;
   --bg: #f4f5f7;
   --surface: #ffffff;
-  --surface-soft: #faf9ff;
-  --surface-low: #f1f3ff;
-  --surface-high: #e9edff;
+  --surface-soft: #f8f9fb;
+  --surface-low: #f1f5fb;
+  --surface-high: #e8eef7;
   --border: #dfe1e6;
   --border-strong: #c3c6d6;
   --text: #051a3e;
@@ -77,7 +77,8 @@ textarea {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
-  padding: 10px 12px;
+  min-height: 38px;
+  padding: 8px 10px;
   outline: none;
 }
 
@@ -89,7 +90,7 @@ textarea:focus {
 }
 
 textarea {
-  min-height: 112px;
+  min-height: 92px;
   resize: vertical;
 }
 
@@ -169,9 +170,9 @@ textarea {
 .state-panel h1,
 .page-header h1 {
   margin: 0;
-  font-size: 36px;
-  line-height: 44px;
-  letter-spacing: -0.02em;
+  font-size: 30px;
+  line-height: 38px;
+  letter-spacing: 0;
   font-weight: 700;
 }
 
@@ -185,10 +186,10 @@ textarea {
   width: var(--sidebar-width);
   background: var(--surface-soft);
   border-right: 1px solid var(--border);
-  padding: 24px 16px;
+  padding: 20px 14px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 18px;
   z-index: 30;
 }
 
@@ -285,7 +286,7 @@ textarea {
   left: var(--sidebar-width);
   right: 0;
   height: var(--topbar-height);
-  padding: 0 24px;
+  padding: 0 20px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -316,16 +317,18 @@ textarea {
 }
 
 .topbar-field {
-  min-width: 180px;
+  min-width: 170px;
+  gap: 0;
 }
 
 .topbar-field span {
-  font-size: 11px;
-  line-height: 14px;
-  color: var(--subtle);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  display: none;
+}
+
+.topbar-field input,
+.topbar-field select {
+  min-height: 36px;
+  padding: 7px 10px;
 }
 
 .icon-button {
@@ -349,8 +352,8 @@ textarea {
 
 .app-main {
   margin-left: var(--sidebar-width);
-  padding: calc(var(--topbar-height) + 24px) 24px 24px;
-  max-width: 1248px;
+  width: calc(100% - var(--sidebar-width));
+  padding: calc(var(--topbar-height) + 24px) 24px 32px;
 }
 
 .page-header {
@@ -358,7 +361,8 @@ textarea {
   justify-content: space-between;
   align-items: end;
   gap: 16px;
-  margin-bottom: 24px;
+  max-width: 1280px;
+  margin: 0 auto 20px;
 }
 
 .page-description {
@@ -367,6 +371,23 @@ textarea {
   font-size: 16px;
   line-height: 24px;
   max-width: 68ch;
+}
+
+.page-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.page-meta span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .notice-banner,
@@ -402,6 +423,9 @@ textarea {
 .metrics-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 16px;
+  max-width: 1280px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .metric-card,
@@ -413,10 +437,10 @@ textarea {
 }
 
 .metric-card {
-  padding: 18px;
+  padding: 16px;
   display: grid;
   gap: 10px;
-  min-height: 152px;
+  min-height: 132px;
 }
 
 .metric-card-head {
@@ -431,9 +455,9 @@ textarea {
 }
 
 .metric-card strong {
-  font-size: 32px;
-  line-height: 40px;
-  letter-spacing: -0.02em;
+  font-size: 30px;
+  line-height: 36px;
+  letter-spacing: 0;
 }
 
 .metric-card p {
@@ -442,12 +466,14 @@ textarea {
 }
 
 .surface-card {
-  padding: 16px;
+  padding: 18px;
 }
 
 .dashboard-grid {
   grid-template-columns: repeat(12, minmax(0, 1fr));
   align-items: start;
+  max-width: 1280px;
+  margin: 0 auto;
 }
 
 .dashboard-span-4 {
@@ -595,11 +621,12 @@ textarea {
 .message-copy {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .appointment-row {
   display: grid;
-  grid-template-columns: 128px minmax(0, 1fr) auto;
+  grid-template-columns: 112px minmax(0, 1fr) auto;
   gap: 16px;
   align-items: center;
 }
@@ -615,6 +642,116 @@ textarea {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.appointment-actions button {
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.calendar-section {
+  display: grid;
+  gap: 18px;
+}
+
+.calendar-day {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  min-height: 620px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.calendar-time-axis {
+  display: grid;
+  grid-template-rows: repeat(12, 1fr);
+  background: var(--surface-soft);
+  border-right: 1px solid var(--border);
+}
+
+.calendar-time-axis span {
+  padding: 8px 10px 0 0;
+  text-align: right;
+  color: var(--subtle);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.calendar-track {
+  position: relative;
+  display: grid;
+  grid-template-rows: repeat(12, 1fr);
+}
+
+.calendar-hour-line {
+  border-bottom: 1px solid var(--border);
+}
+
+.calendar-hour-line:last-child {
+  border-bottom: 0;
+}
+
+.calendar-event {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  min-height: 44px;
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border-left: 4px solid var(--primary);
+  background: #eef5ff;
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+
+.calendar-event strong,
+.calendar-event span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-event span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.calendar-event.confirmed {
+  border-left-color: var(--success);
+  background: #eef8f2;
+}
+
+.calendar-event.completed {
+  border-left-color: var(--secondary);
+  background: #ecfbff;
+}
+
+.calendar-event.cancelled,
+.calendar-event.no_show {
+  border-left-color: var(--danger);
+  background: #fff1ef;
+}
+
+.calendar-event.pending,
+.calendar-event.scheduled {
+  border-left-color: var(--warning);
+  background: #fff8e6;
+}
+
+.calendar-list {
+  display: grid;
+  gap: 12px;
+}
+
+.compact-head {
+  margin-bottom: 0;
 }
 
 .status-badge {
