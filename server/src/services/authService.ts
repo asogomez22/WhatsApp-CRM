@@ -14,6 +14,20 @@ const planPriceMap: Record<PlanCode, number> = {
 export class AuthService {
   constructor(private readonly store: DataStore) {}
 
+  private async buildSession(user: AppUser) {
+    const updatedUser = (await this.store.updateUser(user.id, {
+      lastLoginAt: new Date().toISOString()
+    })) as AppUser;
+
+    const businesses = await this.store.getBusinessesForUser(updatedUser);
+
+    return {
+      token: this.issueToken(updatedUser),
+      user: this.sanitizeUser(updatedUser),
+      businesses
+    };
+  }
+
   sanitizeUser(user: AppUser) {
     return {
       id: user.id,
@@ -39,16 +53,32 @@ export class AuthService {
       throw new Error("Credenciales invalidas");
     }
 
-    const updatedUser = (await this.store.updateUser(user.id, {
-      lastLoginAt: new Date().toISOString()
-    })) as AppUser;
+    return this.buildSession(user);
+  }
 
-    const businesses = await this.store.getBusinessesForUser(updatedUser);
-    return {
-      token: this.issueToken(updatedUser),
-      user: this.sanitizeUser(updatedUser),
-      businesses
-    };
+  async autoLogin() {
+    const users = await this.store.getUsers();
+    let user =
+      users.find((candidate) => candidate.active && candidate.email.toLowerCase() === "demo@tarracowebs.es") ??
+      users.find((candidate) => candidate.active);
+
+    if (!user) {
+      const businesses = await this.store.getBusinesses();
+      if (!businesses.length) {
+        throw new Error("No hay usuarios disponibles para acceso automatico");
+      }
+
+      user = await this.store.createUser({
+        email: "demo@tarracowebs.es",
+        name: "Acceso automatico",
+        passwordHash: hashPasswordSync("demo12345"),
+        role: "platform_admin",
+        businessIds: businesses.map((business) => business.id),
+        active: true
+      });
+    }
+
+    return this.buildSession(user);
   }
 
   async register(input: {
