@@ -133,6 +133,11 @@ class ApiClient {
     return this.request<DashboardSummary>(`/api/businesses/${businessId}/dashboard?date=${date}`);
   }
 
+  getAppointments(businessId: string, date?: string) {
+    const query = date ? `?date=${date}` : "";
+    return this.request<Appointment[]>(`/api/businesses/${businessId}/appointments${query}`);
+  }
+
   createAppointment(
     businessId: string,
     body: Pick<Appointment, "contactId" | "serviceId" | "startAt" | "endAt" | "status" | "source" | "notes">
