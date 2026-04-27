@@ -122,6 +122,11 @@ textarea {
   padding: 10px 14px;
 }
 
+.ghost-button.today-button {
+  min-height: 36px;
+  padding: 7px 12px;
+}
+
 .secondary:hover,
 .ghost-button:hover,
 .icon-button:hover,
@@ -296,6 +301,7 @@ textarea {
 }
 
 .topbar-actions,
+.date-nav,
 .page-actions,
 .metric-card-head,
 .setting-head,
@@ -314,6 +320,10 @@ textarea {
 .topbar-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.date-nav {
+  gap: 6px;
 }
 
 .topbar-field {
@@ -433,7 +443,7 @@ textarea {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
+  box-shadow: 0 1px 2px rgba(9, 30, 66, 0.05);
 }
 
 .metric-card {
@@ -441,6 +451,7 @@ textarea {
   display: grid;
   gap: 10px;
   min-height: 132px;
+  border-top: 3px solid var(--primary);
 }
 
 .metric-card-head {
@@ -506,6 +517,7 @@ textarea {
   border-radius: var(--radius-md);
   padding: 16px;
   margin-bottom: 16px;
+  border-left: 4px solid var(--primary);
 }
 
 .highlight-callout strong {
@@ -650,6 +662,49 @@ textarea {
   line-height: 16px;
 }
 
+.week-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.week-day {
+  display: grid;
+  gap: 2px;
+  min-height: 62px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--muted);
+  text-align: left;
+}
+
+.week-day span {
+  font-size: 11px;
+  line-height: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--subtle);
+}
+
+.week-day strong {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.week-day.active {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.week-day.active span,
+.week-day.active strong {
+  color: #fff;
+}
+
 .calendar-section {
   display: grid;
   gap: 18px;
@@ -684,6 +739,9 @@ textarea {
   position: relative;
   display: grid;
   grid-template-rows: repeat(12, 1fr);
+  background:
+    linear-gradient(90deg, rgba(0, 82, 204, 0.03) 1px, transparent 1px) 0 0 / 56px 100%,
+    var(--surface);
 }
 
 .calendar-hour-line {
@@ -708,6 +766,27 @@ textarea {
   background: #eef5ff;
   box-shadow: var(--shadow-1);
   overflow: hidden;
+}
+
+.calendar-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+.calendar-empty .material-symbols-outlined {
+  color: var(--primary);
+  font-size: 34px;
+}
+
+.calendar-empty p {
+  margin: 0;
 }
 
 .calendar-event strong,
@@ -752,6 +831,29 @@ textarea {
 
 .compact-head {
   margin-bottom: 0;
+}
+
+.empty-state {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 24px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  text-align: center;
+  background: var(--surface-soft);
+}
+
+.empty-state .material-symbols-outlined {
+  color: var(--primary);
+  font-size: 32px;
+}
+
+.empty-state p {
+  margin: 0;
 }
 
 .status-badge {
@@ -930,6 +1032,10 @@ textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .week-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .dashboard-span-4,
   .dashboard-span-6,
   .dashboard-span-8,
@@ -983,6 +1089,7 @@ textarea {
   .signal-grid,
   .mini-stats,
   .service-catalog,
+  .week-strip,
   .simulate-grid,
   .availability-row,
   .info-band,
