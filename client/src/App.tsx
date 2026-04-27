@@ -45,14 +45,28 @@ function App() {
   });
 
   useEffect(() => {
-    api
-      .getBusinesses()
-      .then((businesses) => {
-        if (businesses[0]) {
-          setBusinessId(businesses[0].id);
+    const loadBusinesses = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const businesses = await api.getBusinesses();
+        if (!businesses[0]) {
+          setDashboard(null);
+          setLoading(false);
+          setError("No hay negocios disponibles para mostrar en el dashboard.");
+          return;
         }
-      })
-      .catch((caughtError: Error) => setError(caughtError.message));
+
+        setBusinessId(businesses[0].id);
+      } catch (caughtError) {
+        setDashboard(null);
+        setLoading(false);
+        setError(caughtError instanceof Error ? caughtError.message : "No se pudo abrir el dashboard");
+      }
+    };
+
+    void loadBusinesses();
   }, []);
 
   const loadDashboard = async (selectedBusinessId: string, selectedDate: string) => {
@@ -91,6 +105,7 @@ function App() {
   const nextAppointment = dashboard?.appointments.find((appointment) =>
     ["pending", "scheduled", "confirmed"].includes(appointment.status)
   );
+  const hasBookingOptions = Boolean(dashboard?.contacts.length && dashboard?.services.length);
 
   const fillEndAt = (serviceId: string, startAt: string) => {
     if (!serviceId || !startAt) {
@@ -176,14 +191,14 @@ function App() {
           <div>
             <p className="eyebrow">TarracoWebs · WhatsApp CRM</p>
             <h1>Dashboard diario</h1>
-            <p className="muted">Simple, operativo y centrado en citas, mensajes y automatizaciones.</p>
+            <p className="muted">Acceso directo al dashboard, sin login, centrado en citas, mensajes y automatizaciones.</p>
           </div>
           <div className="topbar-actions">
             <label className="field inline-field">
               <span>Fecha</span>
               <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
             </label>
-            <button className="secondary" onClick={runAutomations} type="button">
+            <button className="secondary" onClick={runAutomations} type="button" disabled={!dashboard || loading}>
               Procesar automatizaciones
             </button>
           </div>
@@ -293,9 +308,13 @@ function App() {
                   </div>
 
                   <form className="form-grid" onSubmit={submitAppointment}>
+                    {!hasBookingOptions && (
+                      <div className="empty-state">Faltan contactos o servicios para poder crear citas manuales.</div>
+                    )}
                     <label className="field">
                       <span>Paciente</span>
                       <select
+                        disabled={!hasBookingOptions}
                         value={appointmentForm.contactId}
                         onChange={(event) =>
                           setAppointmentForm((current) => ({ ...current, contactId: event.target.value }))
@@ -312,6 +331,7 @@ function App() {
                     <label className="field">
                       <span>Servicio</span>
                       <select
+                        disabled={!hasBookingOptions}
                         value={appointmentForm.serviceId}
                         onChange={(event) =>
                           setAppointmentForm((current) => ({ ...current, serviceId: event.target.value }))
@@ -328,6 +348,7 @@ function App() {
                     <label className="field">
                       <span>Fecha y hora</span>
                       <input
+                        disabled={!hasBookingOptions}
                         type="datetime-local"
                         value={appointmentForm.startAtLocal}
                         onChange={(event) =>
@@ -339,7 +360,7 @@ function App() {
                       />
                     </label>
 
-                    <button className="primary" type="submit">
+                    <button className="primary" type="submit" disabled={!hasBookingOptions}>
                       Guardar cita
                     </button>
                   </form>
