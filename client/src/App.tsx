@@ -1,11 +1,13 @@
-import { FormEvent, startTransition, useEffect, useMemo, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, startTransition, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import {
+  AdminClientSummary,
   Appointment,
   AppointmentStatus,
   AuthSession,
   BillingStatus,
   Business,
+  Contact,
   DashboardSummary,
   MessageLog,
   PlanCode,
@@ -17,12 +19,14 @@ const weekdayLabel = ["Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"];
 const calendarHours = Array.from({ length: 12 }, (_, index) => index + 8);
 const viewTabs = [
   { id: "overview", label: "Panel", icon: "space_dashboard" },
-  { id: "agenda", label: "Agenda", icon: "calendar_month" },
-  { id: "inbox", label: "Inbox", icon: "chat" },
-  { id: "setup", label: "Automatizaciones", icon: "auto_awesome" }
+  { id: "agenda", label: "Citas", icon: "calendar_month" },
+  { id: "clients", label: "Clientes", icon: "groups" },
+  { id: "setup", label: "Ajustes", icon: "settings" },
+  { id: "admin", label: "Admin", icon: "admin_panel_settings" }
 ] as const;
 
 type ViewId = (typeof viewTabs)[number]["id"];
+type CalendarMode = "day" | "week" | "month";
 
 const viewMeta: Record<
   ViewId,
@@ -38,19 +42,24 @@ const viewMeta: Record<
     description: "Salud del negocio, onboarding, actividad y automatizaciones visibles en una sola capa operativa."
   },
   agenda: {
-    eyebrow: "Calendar",
-    title: "Agenda diaria",
-    description: "Control de citas, altas manuales y captacion en un layout compacto y de lectura rapida."
+    eyebrow: "Calendario",
+    title: "Citas",
+    description: "Vista diaria y semanal con alta de citas desde un modal enfocado."
   },
-  inbox: {
-    eyebrow: "Inbox",
-    title: "Mensajeria y flujos",
-    description: "Actividad reciente, simulacion de WhatsApp y visibilidad del equipo que opera el canal."
+  clients: {
+    eyebrow: "CRM",
+    title: "Clientes",
+    description: "Listado editable de clientes con altas rapidas, edicion y eliminacion."
   },
   setup: {
-    eyebrow: "Automation Settings",
-    title: "Configuracion y readiness",
-    description: "Canal, resenas, billing, catalogo y disponibilidad presentados con la misma logica de cards del mock."
+    eyebrow: "Ajustes",
+    title: "Configuracion",
+    description: "Perfil del negocio, servicios y disponibilidad operativa."
+  },
+  admin: {
+    eyebrow: "Platform admin",
+    title: "Clientes y planes",
+    description: "Alta de clientes con credenciales propias, plan asignado y acceso separado por negocio."
   }
 };
 
@@ -109,6 +118,27 @@ const defaultAvailabilityRule = {
   end: "14:00"
 };
 
+const defaultLoginForm = {
+  email: "",
+  password: ""
+};
+
+const defaultAdminClientForm = {
+  businessName: "",
+  businessEmail: "",
+  phone: "",
+  city: "",
+  address: "",
+  timezone: "Europe/Madrid",
+  notes: "",
+  plan: "full_pack" as PlanCode,
+  googleReviewLink: "https://g.page/r/demo-review-link",
+  billingStatus: "trial" as BillingStatus,
+  ownerName: "",
+  ownerEmail: "",
+  ownerPassword: ""
+};
+
 const addDays = (isoDate: string, days: number) => {
   const value = new Date(`${isoDate}T00:00:00.000Z`);
   value.setUTCDate(value.getUTCDate() + days);
@@ -125,6 +155,23 @@ const getWeekDates = (isoDate: string) => {
     const date = new Date(monday);
     date.setUTCDate(monday.getUTCDate() + index);
     return date.toISOString().slice(0, 10);
+  });
+};
+
+const getMonthDates = (isoDate: string) => {
+  const selected = new Date(`${isoDate}T00:00:00.000Z`);
+  const first = new Date(Date.UTC(selected.getUTCFullYear(), selected.getUTCMonth(), 1));
+  const startOffset = (first.getUTCDay() + 6) % 7;
+  const gridStart = new Date(first);
+  gridStart.setUTCDate(first.getUTCDate() - startOffset);
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setUTCDate(gridStart.getUTCDate() + index);
+    return {
+      iso: date.toISOString().slice(0, 10),
+      inMonth: date.getUTCMonth() === selected.getUTCMonth()
+    };
   });
 };
 
@@ -188,12 +235,21 @@ function App() {
   const [session, setSession] = useState<{ user: SessionUser; businesses: Business[] } | null>(null);
   const [appLoading, setAppLoading] = useState(true);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
+  const [loadingAdminClients, setLoadingAdminClients] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [loginForm, setLoginForm] = useState(defaultLoginForm);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [selectedBusinessId, setSelectedBusinessId] = useState("");
   const [view, setView] = useState<ViewId>("overview");
+  const [calendarMode, setCalendarMode] = useState<CalendarMode>("week");
   const [date, setDate] = useState(today);
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
+  const [adminClients, setAdminClients] = useState<AdminClientSummary[]>([]);
+  const [appointmentModalOpen, setAppointmentModalOpen] = useState(false);
+  const [contactModalOpen, setContactModalOpen] = useState(false);
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [contactSearch, setContactSearch] = useState("");
   const [businessForm, setBusinessForm] = useState(defaultBusinessForm);
   const [channelForm, setChannelForm] = useState(defaultChannelForm);
   const [newBusinessForm, setNewBusinessForm] = useState({
@@ -205,6 +261,7 @@ function App() {
     plan: "reviews" as PlanCode,
     googleReviewLink: "https://g.page/r/demo-review-link"
   });
+  const [adminClientForm, setAdminClientForm] = useState(defaultAdminClientForm);
   const [contactForm, setContactForm] = useState({
     name: "",
     phone: "",
@@ -237,6 +294,9 @@ function App() {
       businesses: nextSession.businesses
     });
     setSelectedBusinessId(nextSession.businesses[0]?.id || "");
+    if (!nextSession.businesses.length && nextSession.user.role === "platform_admin") {
+      setView("admin");
+    }
     setDashboard(null);
     setPageError(null);
     setNotice(null);
@@ -248,33 +308,27 @@ function App() {
     const loadApp = async () => {
       setAppLoading(true);
       try {
-        let currentSession:
-          | {
-              user: SessionUser;
-              businesses: Business[];
-            }
-          | AuthSession;
-
         if (api.getToken()) {
           try {
-            currentSession = await api.getSession();
+            const currentSession = await api.getSession();
+            if (cancelled) {
+              return;
+            }
+
+            applySession({
+              token: api.getToken(),
+              user: currentSession.user,
+              businesses: currentSession.businesses
+            });
           } catch {
             api.setToken("");
-            currentSession = await api.autoLogin();
+            if (!cancelled) {
+              setSession(null);
+            }
           }
         } else {
-          currentSession = await api.autoLogin();
+          setSession(null);
         }
-
-        if (cancelled) {
-          return;
-        }
-
-        applySession({
-          token: "token" in currentSession ? currentSession.token : api.getToken(),
-          user: currentSession.user,
-          businesses: currentSession.businesses
-        });
       } catch (error) {
         api.setToken("");
         if (!cancelled) {
@@ -406,6 +460,10 @@ function App() {
     () => session?.businesses.find((business) => business.id === selectedBusinessId) ?? null,
     [selectedBusinessId, session?.businesses]
   );
+  const visibleTabs = useMemo(
+    () => viewTabs.filter((tab) => tab.id !== "admin" || session?.user.role === "platform_admin"),
+    [session?.user.role]
+  );
   const activeView = viewMeta[view];
 
   const contactsById = useMemo(
@@ -422,6 +480,27 @@ function App() {
     ["pending", "scheduled", "confirmed"].includes(appointment.status)
   );
   const selectedWeek = useMemo(() => getWeekDates(date), [date]);
+  const selectedMonth = useMemo(() => getMonthDates(date), [date]);
+  const pendingAppointments = dashboard?.appointments.filter((appointment) => appointment.status === "pending").length ?? 0;
+  const unconfirmedAppointments =
+    dashboard?.appointments.filter((appointment) => appointment.status === "scheduled").length ?? 0;
+  const confirmedAppointments =
+    dashboard?.appointments.filter((appointment) => appointment.status === "confirmed" || appointment.status === "completed").length ?? 0;
+  const filteredContacts = useMemo(() => {
+    const query = contactSearch.trim().toLowerCase();
+    if (!dashboard || !query) {
+      return dashboard?.contacts.slice(0, 6) ?? [];
+    }
+
+    return dashboard.contacts
+      .filter(
+        (contact) =>
+          contact.name.toLowerCase().includes(query) ||
+          contact.phone.toLowerCase().includes(query) ||
+          (contact.email ?? "").toLowerCase().includes(query)
+      )
+      .slice(0, 8);
+  }, [contactSearch, dashboard]);
 
   const performAction = async (task: () => Promise<void>, successMessage?: string) => {
     setPageError(null);
@@ -435,6 +514,51 @@ function App() {
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "No se pudo completar la accion");
     }
+  };
+
+  const refreshAdminClients = async () => {
+    if (session?.user.role !== "platform_admin") {
+      return;
+    }
+
+    setLoadingAdminClients(true);
+    try {
+      setAdminClients(await api.getAdminClients());
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "No se pudieron cargar los clientes");
+    } finally {
+      setLoadingAdminClients(false);
+    }
+  };
+
+  useEffect(() => {
+    if (session?.user.role === "platform_admin") {
+      void refreshAdminClients();
+    }
+  }, [session?.user.role]);
+
+  const submitLogin = async (event: FormEvent) => {
+    event.preventDefault();
+    setLoginLoading(true);
+    setPageError(null);
+
+    try {
+      const nextSession = await api.login(loginForm);
+      applySession(nextSession);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "No se pudo iniciar sesion");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const logout = () => {
+    api.setToken("");
+    setSession(null);
+    setDashboard(null);
+    setAdminClients([]);
+    setSelectedBusinessId("");
+    setView("overview");
   };
 
   const submitAppointment = async (event: FormEvent) => {
@@ -463,6 +587,8 @@ function App() {
         notes: appointmentForm.notes || undefined
       });
       setAppointmentForm((current) => ({ ...current, startAtLocal: "", notes: "" }));
+      setAppointmentModalOpen(false);
+      setContactSearch("");
       await refreshDashboard(dashboard.business.id, date);
     }, "Cita creada");
   };
@@ -578,8 +704,70 @@ function App() {
         notes: "",
         tags: "lead, nuevo"
       });
+      setContactModalOpen(false);
+      setEditingContactId(null);
       await refreshDashboard(dashboard.business.id, date);
     }, "Contacto creado");
+  };
+
+  const openNewContactModal = () => {
+    setEditingContactId(null);
+    setContactForm({
+      name: "",
+      phone: "",
+      email: "",
+      notes: "",
+      tags: "lead, nuevo"
+    });
+    setContactModalOpen(true);
+  };
+
+  const openEditContactModal = (contact: Contact) => {
+    setEditingContactId(contact.id);
+    setContactForm({
+      name: contact.name,
+      phone: contact.phone,
+      email: contact.email || "",
+      notes: contact.notes || "",
+      tags: contact.tags.join(", ")
+    });
+    setContactModalOpen(true);
+  };
+
+  const saveContact = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!dashboard) {
+      return;
+    }
+
+    if (!editingContactId) {
+      await addContact(event);
+      return;
+    }
+
+    await performAction(async () => {
+      await api.updateContact(dashboard.business.id, editingContactId, {
+        name: contactForm.name,
+        phone: contactForm.phone,
+        email: contactForm.email || undefined,
+        notes: contactForm.notes || undefined,
+        tags: normalizeTags(contactForm.tags)
+      });
+      setContactModalOpen(false);
+      setEditingContactId(null);
+      await refreshDashboard(dashboard.business.id, date);
+    }, "Cliente actualizado");
+  };
+
+  const deleteContact = async (contactId: string) => {
+    if (!dashboard || !window.confirm("Eliminar este cliente?")) {
+      return;
+    }
+
+    await performAction(async () => {
+      await api.deleteContact(dashboard.business.id, contactId);
+      await refreshDashboard(dashboard.business.id, date);
+    }, "Cliente eliminado");
   };
 
   const saveAvailability = async (event: FormEvent) => {
@@ -629,6 +817,22 @@ function App() {
     }, "Nuevo negocio creado");
   };
 
+  const createAdminClient = async (event: FormEvent) => {
+    event.preventDefault();
+
+    await performAction(async () => {
+      const client = await api.createAdminClient({
+        ...adminClientForm,
+        address: adminClientForm.address || undefined,
+        notes: adminClientForm.notes || undefined
+      });
+      setAdminClientForm(defaultAdminClientForm);
+      await refreshBusinesses(client.business.id);
+      await refreshAdminClients();
+      setView("setup");
+    }, "Cliente creado con usuario y plan asignado");
+  };
+
   const openBillingLink = async (mode: "checkout" | "portal") => {
     if (!dashboard) {
       return;
@@ -654,23 +858,38 @@ function App() {
 
   if (!session) {
     return (
-      <div className="state-shell">
-        <section className="state-card state-panel">
-          <div className="state-copy">
+      <div className="login-shell">
+        <section className="login-panel">
+          <div className="login-copy">
             <p className="eyebrow">TarracoWebs · WhatsApp CRM</p>
-            <h1>Acceso directo al dashboard.</h1>
-            <p className="muted">
-              El acceso se abre automaticamente sin formulario de login. Si la sesion automatica falla, puedes
-              reintentar desde aqui.
-            </p>
+            <h1>Inicio de sesion</h1>
+            <p className="muted">Acceso con credenciales y token JWT para clientes y administradores.</p>
           </div>
 
-          <div className="state-actions">
+          <form className="login-form" onSubmit={submitLogin}>
             {pageError && <div className="error-banner">{pageError}</div>}
-            <button className="primary" type="button" onClick={() => window.location.reload()}>
-              Reintentar acceso
+            <label className="field">
+              <span>Email</span>
+              <input
+                type="email"
+                autoComplete="email"
+                value={loginForm.email}
+                onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>Password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={loginForm.password}
+                onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
+              />
+            </label>
+            <button className="primary" type="submit" disabled={loginLoading}>
+              {loginLoading ? "Entrando..." : "Entrar"}
             </button>
-          </div>
+          </form>
         </section>
       </div>
     );
@@ -683,12 +902,12 @@ function App() {
           <div className="brand-mark">{selectedBusiness?.name?.slice(0, 1) || "T"}</div>
           <div>
             <h2>{selectedBusiness?.name || "TarracoWebs CRM"}</h2>
-            <p>Admin Dashboard</p>
+            <p>CRM</p>
           </div>
         </div>
 
         <nav className="sidebar-nav">
-          {viewTabs.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.id}
               className={view === tab.id ? "sidebar-link active" : "sidebar-link"}
@@ -703,47 +922,33 @@ function App() {
 
         <div className="sidebar-footer">
           <div className="sidebar-note-card">
-            <span className="eyebrow">Canal activo</span>
-            <strong>{dashboard?.channel?.phoneE164 || "Pendiente"}</strong>
-            <span className="muted">
-              {dashboard?.channel?.templatesReady ? "Plantillas listas" : "Plantillas pendientes"}
-            </span>
-          </div>
-          <div className="sidebar-note-card">
             <span className="eyebrow">Sesion</span>
             <strong>{session.user.name}</strong>
             <span className="muted">{session.user.email}</span>
           </div>
+          <button className="ghost-button sidebar-logout" type="button" onClick={logout}>
+            Cerrar sesion
+          </button>
         </div>
       </aside>
 
       <header className="app-topbar">
         <div className="topbar-title">TarracoWebs CRM</div>
         <div className="topbar-actions">
-          <div className="date-nav" aria-label="Navegacion de fecha">
-            <button className="icon-button" type="button" onClick={() => setDate((current) => addDays(current, -1))}>
-              <span className="material-symbols-outlined">chevron_left</span>
-            </button>
-            <button className="ghost-button today-button" type="button" onClick={() => setDate(today)}>
-              Hoy
-            </button>
-            <button className="icon-button" type="button" onClick={() => setDate((current) => addDays(current, 1))}>
-              <span className="material-symbols-outlined">chevron_right</span>
-            </button>
-          </div>
           <label className="field topbar-field">
             <span>Negocio</span>
-            <select value={selectedBusinessId} onChange={(event) => setSelectedBusinessId(event.target.value)}>
+            <select
+              value={selectedBusinessId}
+              onChange={(event) => setSelectedBusinessId(event.target.value)}
+              disabled={!session.businesses.length}
+            >
+              {!session.businesses.length && <option value="">Sin negocios</option>}
               {session.businesses.map((business) => (
                 <option key={business.id} value={business.id}>
                   {business.name}
                 </option>
               ))}
             </select>
-          </label>
-          <label className="field topbar-field">
-            <span>Fecha</span>
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
           </label>
           <div className="avatar-chip">{session.user.name.slice(0, 1)}</div>
         </div>
@@ -766,7 +971,18 @@ function App() {
         {pageError && <div className="error-banner">{pageError}</div>}
         {notice && <div className="notice-banner">{notice}</div>}
 
-        {loadingDashboard || !dashboard ? (
+        {view === "admin" && session.user.role === "platform_admin" ? (
+          <AdminClientsView
+            clients={adminClients}
+            form={adminClientForm}
+            loading={loadingAdminClients}
+            planLabel={planLabel}
+            billingLabel={billingLabel}
+            onRefresh={() => void refreshAdminClients()}
+            onSubmit={createAdminClient}
+            onFormChange={setAdminClientForm}
+          />
+        ) : loadingDashboard || !dashboard ? (
           <div className="state-card">Cargando datos del negocio...</div>
         ) : (
           <>
@@ -774,151 +990,50 @@ function App() {
               <>
                 <section className="metrics-grid">
                   <MetricCard
-                    label="Citas hoy"
-                    value={String(dashboard.metrics.todayAppointments)}
-                    description="Agenda filtrada por fecha"
-                    icon="calendar_month"
+                    label="Citas pendientes"
+                    value={String(pendingAppointments)}
+                    description="Necesitan primera revision"
+                    icon="pending_actions"
                   />
                   <MetricCard
-                    label="Pendientes"
-                    value={String(dashboard.metrics.pendingConfirmations)}
-                    description="Confirmaciones abiertas"
+                    label="Sin confirmar"
+                    value={String(unconfirmedAppointments)}
+                    description="Programadas sin confirmacion"
                     icon="schedule"
                   />
                   <MetricCard
-                    label="Leads"
-                    value={String(dashboard.metrics.leadsTracked)}
-                    description="Contactos detectados"
-                    icon="groups"
-                  />
-                  <MetricCard
-                    label="Confirmacion"
-                    value={`${dashboard.metrics.confirmedRate}%`}
-                    description="Ratio historico"
+                    label="Confirmadas"
+                    value={String(confirmedAppointments)}
+                    description="Confirmadas o completadas"
                     icon="verified"
                   />
                 </section>
 
-                <section className="dashboard-grid">
-                  <section className="surface-card dashboard-span-8">
+                <section className="dashboard-grid overview-grid">
+                  <section className="surface-card dashboard-span-12">
                     <div className="section-head">
                       <div>
-                        <p className="eyebrow">Agenda inmediata</p>
-                        <h3>Proxima actividad</h3>
+                        <p className="eyebrow">Panel general</p>
+                        <h3>Atajos</h3>
                       </div>
-                      <span className="muted">{dashboard.appointments.length} citas en el dia</span>
                     </div>
 
-                    <div className="highlight-callout">
-                      <div>
-                        <strong>
-                          {nextAppointment ? timeLabel(nextAppointment.startAt, dashboard.business.timezone) : "Sin huecos activos"}
-                        </strong>
-                        <p className="muted">
-                          {nextAppointment
-                            ? `${contactsById.get(nextAppointment.contactId)?.name || "Paciente"} · ${
-                                servicesById.get(nextAppointment.serviceId)?.name || "Servicio"
-                              }`
-                            : "La agenda de hoy esta despejada"}
-                        </p>
-                      </div>
-                      <button className="secondary" type="button" onClick={() => setView("agenda")}>
-                        Abrir agenda
+                    <div className="shortcut-grid">
+                      <button className="shortcut-card" type="button" onClick={() => setView("agenda")}>
+                        <span className="material-symbols-outlined">calendar_month</span>
+                        <strong>Citas</strong>
+                        <small>{dashboard.appointments.length} en la fecha seleccionada</small>
                       </button>
-                    </div>
-
-                    <div className="stack-list">
-                      {dashboard.appointments.slice(0, 5).map((appointment) => (
-                        <AppointmentRow
-                          key={appointment.id}
-                          appointment={appointment}
-                          contactName={contactsById.get(appointment.contactId)?.name || "Paciente"}
-                          serviceName={servicesById.get(appointment.serviceId)?.name || "Servicio"}
-                          timezone={dashboard.business.timezone}
-                          onStatusChange={updateStatus}
-                        />
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="surface-card dashboard-span-4">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Checklist</p>
-                        <h3>Onboarding operativo</h3>
-                      </div>
-                      <span className="muted">{dashboard.onboarding.completionRatio}% listo</span>
-                    </div>
-
-                    <div className="checklist-list">
-                      {dashboard.onboarding.items.map((item) => (
-                        <ChecklistRow key={item.id} item={item} />
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="surface-card dashboard-span-6">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Canal</p>
-                        <h3>Readiness del producto</h3>
-                      </div>
-                    </div>
-
-                    <div className="signal-grid">
-                      <SignalCard
-                        label="Resenas"
-                        status={dashboard.automation.reviewsReady}
-                        detail={dashboard.business.googleReviewLink ? "Link y canal listos" : "Falta enlace o canal"}
-                      />
-                      <SignalCard
-                        label="Anti no-show"
-                        status={dashboard.automation.remindersReady}
-                        detail={dashboard.availabilityRules.length ? "Disponibilidad cargada" : "Carga reglas de agenda"}
-                      />
-                      <SignalCard
-                        label="Citas auto"
-                        status={dashboard.automation.autoBookingReady}
-                        detail={dashboard.services.length ? "Servicios disponibles" : "Faltan servicios"}
-                      />
-                      <SignalCard
-                        label="Handoff"
-                        status={dashboard.automation.handoffReady}
-                        detail={dashboard.users.length ? "Equipo asignado" : "Sin usuarios del negocio"}
-                      />
-                    </div>
-
-                    <div className="info-band">
-                      <span>WhatsApp: {dashboard.channel?.phoneE164 || "Pendiente"}</span>
-                      <span>Plantillas: {dashboard.channel?.templatesReady ? "Listas" : "Pendientes"}</span>
-                      <span>Meta verificado: {dashboard.channel?.metaVerified ? "Si" : "No"}</span>
-                    </div>
-                  </section>
-
-                  <section className="surface-card dashboard-span-6">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Mensajes</p>
-                        <h3>Actividad reciente</h3>
-                      </div>
-                      <button className="ghost-button" type="button" onClick={() => setView("inbox")}>
-                        Abrir inbox
+                      <button className="shortcut-card" type="button" onClick={() => setView("clients")}>
+                        <span className="material-symbols-outlined">groups</span>
+                        <strong>Clientes</strong>
+                        <small>{dashboard.contacts.length} clientes guardados</small>
                       </button>
-                    </div>
-
-                    <div className="message-stack">
-                      {dashboard.recentMessages.length ? (
-                        dashboard.recentMessages.slice(0, 6).map((message) => (
-                          <MessageRow
-                            key={message.id}
-                            message={message}
-                            contactName={contactsById.get(message.contactId)?.name || "Paciente"}
-                            timezone={dashboard.business.timezone}
-                          />
-                        ))
-                      ) : (
-                        <EmptyState icon="forum" title="Sin mensajes recientes" detail="La actividad de WhatsApp aparecera aqui." />
-                      )}
+                      <button className="shortcut-card" type="button" onClick={() => setView("setup")}>
+                        <span className="material-symbols-outlined">settings</span>
+                        <strong>Ajustes</strong>
+                        <small>Perfil, servicios y disponibilidad</small>
+                      </button>
                     </div>
                   </section>
                 </section>
@@ -927,453 +1042,123 @@ function App() {
 
             {view === "agenda" && (
               <section className="dashboard-grid">
-                <section className="surface-card dashboard-span-8">
-                  <div className="section-head">
+                <section className="surface-card dashboard-span-12">
+                  <div className="section-head calendar-head">
                     <div>
-                      <p className="eyebrow">Agenda del dia</p>
-                      <h3>{dateLabel(date)}</h3>
+                      <p className="eyebrow">Citas</p>
+                      <h3>{calendarMode === "day" ? dateLabel(date) : calendarMode === "week" ? "Semana" : "Mes"}</h3>
                     </div>
-                    <span className="muted">
-                      {dashboard.metrics.completedAppointments} completadas · {dashboard.metrics.noShows} no-show
-                    </span>
+                    <div className="calendar-toolbar">
+                      <div className="date-nav" aria-label="Navegacion de fecha">
+                        <button className="icon-button" type="button" onClick={() => setDate((current) => addDays(current, -1))}>
+                          <span className="material-symbols-outlined">chevron_left</span>
+                        </button>
+                        <input className="calendar-date-input" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+                        <button className="icon-button" type="button" onClick={() => setDate((current) => addDays(current, 1))}>
+                          <span className="material-symbols-outlined">chevron_right</span>
+                        </button>
+                      </div>
+                      <div className="segmented-control">
+                        {(["day", "week", "month"] as CalendarMode[]).map((mode) => (
+                          <button
+                            key={mode}
+                            className={calendarMode === mode ? "active" : ""}
+                            type="button"
+                            onClick={() => setCalendarMode(mode)}
+                          >
+                            {mode === "day" ? "Dia" : mode === "week" ? "Semana" : "Mes"}
+                          </button>
+                        ))}
+                      </div>
+                      <button className="primary" type="button" onClick={() => setAppointmentModalOpen(true)}>
+                        Agendar cita
+                      </button>
+                    </div>
                   </div>
 
-                  <WeekStrip selectedDate={date} weekDates={selectedWeek} onSelectDate={setDate} />
+                  {calendarMode === "day" && (
+                    <CalendarDay
+                      appointments={dashboard.appointments}
+                      contactsById={contactsById}
+                      servicesById={servicesById}
+                      timezone={dashboard.business.timezone}
+                      onStatusChange={updateStatus}
+                    />
+                  )}
 
-                  <CalendarDay
-                    appointments={dashboard.appointments}
-                    contactsById={contactsById}
-                    servicesById={servicesById}
-                    timezone={dashboard.business.timezone}
-                    onStatusChange={updateStatus}
-                  />
+                  {calendarMode === "week" && (
+                    <CalendarWeek
+                      selectedDate={date}
+                      weekDates={selectedWeek}
+                      appointments={dashboard.appointments}
+                      contactsById={contactsById}
+                      servicesById={servicesById}
+                      timezone={dashboard.business.timezone}
+                      onSelectDate={setDate}
+                    />
+                  )}
+
+                  {calendarMode === "month" && (
+                    <CalendarMonth
+                      selectedDate={date}
+                      monthDates={selectedMonth}
+                      appointments={dashboard.appointments}
+                      contactsById={contactsById}
+                      onSelectDate={setDate}
+                    />
+                  )}
                 </section>
-
-                <div className="dashboard-span-4 side-stack">
-                  <section className="surface-card">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Alta rapida</p>
-                        <h3>Nueva cita</h3>
-                      </div>
-                    </div>
-
-                    <form className="form-grid" onSubmit={submitAppointment}>
-                      <label className="field">
-                        <span>Paciente</span>
-                        <select
-                          value={appointmentForm.contactId}
-                          onChange={(event) =>
-                            setAppointmentForm((current) => ({ ...current, contactId: event.target.value }))
-                          }
-                        >
-                          {dashboard.contacts.map((contact) => (
-                            <option key={contact.id} value={contact.id}>
-                              {contact.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label className="field">
-                        <span>Servicio</span>
-                        <select
-                          value={appointmentForm.serviceId}
-                          onChange={(event) =>
-                            setAppointmentForm((current) => ({ ...current, serviceId: event.target.value }))
-                          }
-                        >
-                          {dashboard.services.map((service) => (
-                            <option key={service.id} value={service.id}>
-                              {service.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label className="field">
-                        <span>Fecha y hora</span>
-                        <input
-                          type="datetime-local"
-                          value={appointmentForm.startAtLocal}
-                          onChange={(event) =>
-                            setAppointmentForm((current) => ({ ...current, startAtLocal: event.target.value }))
-                          }
-                        />
-                      </label>
-
-                      <label className="field">
-                        <span>Notas</span>
-                        <textarea
-                          value={appointmentForm.notes}
-                          onChange={(event) =>
-                            setAppointmentForm((current) => ({ ...current, notes: event.target.value }))
-                          }
-                        />
-                      </label>
-
-                      <button className="primary" type="submit">
-                        Guardar cita
-                      </button>
-                    </form>
-                  </section>
-
-                  <section className="surface-card">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Captacion</p>
-                        <h3>Nuevo contacto</h3>
-                      </div>
-                    </div>
-
-                    <form className="form-grid" onSubmit={addContact}>
-                      <label className="field">
-                        <span>Nombre</span>
-                        <input
-                          value={contactForm.name}
-                          onChange={(event) => setContactForm((current) => ({ ...current, name: event.target.value }))}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Telefono</span>
-                        <input
-                          value={contactForm.phone}
-                          onChange={(event) => setContactForm((current) => ({ ...current, phone: event.target.value }))}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Email</span>
-                        <input
-                          value={contactForm.email}
-                          onChange={(event) => setContactForm((current) => ({ ...current, email: event.target.value }))}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Tags</span>
-                        <input
-                          value={contactForm.tags}
-                          onChange={(event) => setContactForm((current) => ({ ...current, tags: event.target.value }))}
-                        />
-                      </label>
-                      <button className="secondary" type="submit">
-                        Guardar contacto
-                      </button>
-                    </form>
-                  </section>
-
-                  <section className="surface-card">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Resumen</p>
-                        <h3>Estado del dia</h3>
-                      </div>
-                    </div>
-                    <div className="mini-stats agenda-mini-stats">
-                      <MiniStat label="Citas" value={String(dashboard.metrics.todayAppointments)} />
-                      <MiniStat label="Confirmar" value={String(dashboard.metrics.pendingConfirmations)} />
-                      <MiniStat label="Completadas" value={String(dashboard.metrics.completedAppointments)} />
-                    </div>
-                  </section>
-                </div>
               </section>
             )}
 
-            {view === "inbox" && (
+            {view === "clients" && (
               <section className="dashboard-grid">
-                <section className="surface-card dashboard-span-8">
+                <section className="surface-card dashboard-span-12">
                   <div className="section-head">
                     <div>
-                      <p className="eyebrow">Inbox de WhatsApp</p>
-                      <h3>Actividad y simulacion</h3>
+                      <p className="eyebrow">Clientes</p>
+                      <h3>{dashboard.contacts.length} clientes</h3>
                     </div>
+                    <button className="primary" type="button" onClick={openNewContactModal}>
+                      Nuevo cliente
+                    </button>
                   </div>
 
-                  <form className="simulate-grid" onSubmit={simulateMessage}>
-                    <label className="field">
-                      <span>Telefono</span>
-                      <input
-                        value={simulateForm.fromPhone}
-                        onChange={(event) =>
-                          setSimulateForm((current) => ({ ...current, fromPhone: event.target.value }))
-                        }
-                      />
-                    </label>
-                    <label className="field simulate-wide">
-                      <span>Mensaje</span>
-                      <input
-                        value={simulateForm.text}
-                        onChange={(event) => setSimulateForm((current) => ({ ...current, text: event.target.value }))}
-                      />
-                    </label>
-                    <button className="primary" type="submit">
-                      Ejecutar flujo
-                    </button>
-                  </form>
-
-                  <div className="message-stack">
-                    {dashboard.recentMessages.length ? (
-                      dashboard.recentMessages.map((message) => (
-                        <MessageRow
-                          key={message.id}
-                          message={message}
-                          contactName={contactsById.get(message.contactId)?.name || "Paciente"}
-                          timezone={dashboard.business.timezone}
-                        />
+                  <div className="contact-table">
+                    {dashboard.contacts.length ? (
+                      dashboard.contacts.map((contact) => (
+                        <article key={contact.id} className="contact-row">
+                          <div>
+                            <strong>{contact.name}</strong>
+                            <span>{contact.email || "Sin email"}</span>
+                          </div>
+                          <span>{contact.phone}</span>
+                          <span>{contact.tags.join(", ") || "Sin tags"}</span>
+                          <div className="row-actions">
+                            <button className="ghost-button" type="button" onClick={() => openEditContactModal(contact)}>
+                              Editar
+                            </button>
+                            <button className="ghost-button danger" type="button" onClick={() => void deleteContact(contact.id)}>
+                              Eliminar
+                            </button>
+                          </div>
+                        </article>
                       ))
                     ) : (
-                      <EmptyState icon="forum" title="Sin conversaciones" detail="Ejecuta una simulacion o espera nuevos mensajes del canal." />
+                      <EmptyState icon="groups" title="Sin clientes" detail="Crea un cliente para poder agendar citas." />
                     )}
                   </div>
                 </section>
-
-                <div className="dashboard-span-4 side-stack">
-                  <section className="surface-card">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Flujos abiertos</p>
-                        <h3>Radar operativo</h3>
-                      </div>
-                    </div>
-
-                    <div className="mini-stats">
-                      <MiniStat label="Flujos abiertos" value={String(dashboard.metrics.whatsappOpenFlows)} />
-                      <MiniStat label="Resenas pendientes" value={String(dashboard.metrics.reviewsPending)} />
-                      <MiniStat label="Por confirmar" value={String(dashboard.metrics.pendingConfirmations)} />
-                    </div>
-                  </section>
-
-                  <section className="surface-card">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Equipo</p>
-                        <h3>Usuarios con acceso</h3>
-                      </div>
-                    </div>
-
-                    <div className="team-list">
-                      {dashboard.users.map((user) => (
-                        <div key={user.id} className="team-card">
-                          <strong>{user.name}</strong>
-                          <span>{user.role}</span>
-                          <span className="muted">{user.email}</span>
-                          <span className="muted">
-                            {user.lastLoginAt
-                              ? dateTimeLabel(user.lastLoginAt, dashboard.business.timezone)
-                              : "Sin login reciente"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                </div>
               </section>
             )}
 
             {view === "setup" && (
               <section className="dashboard-grid">
-                <section className="surface-card dashboard-span-6 setting-card">
-                  <div className="setting-head">
-                    <div className="setting-title">
-                      <span className="material-symbols-outlined accent-icon">auto_awesome</span>
-                      <div>
-                        <h3>WhatsApp Reminders</h3>
-                        <p>Canal dedicado, plantillas y verificacion listos para automatizar recordatorios.</p>
-                      </div>
-                    </div>
-                    <StatusToggle
-                      label={channelForm.templatesReady ? "Active" : "Inactive"}
-                      checked={channelForm.templatesReady}
-                      onChange={(checked) => setChannelForm((current) => ({ ...current, templatesReady: checked }))}
-                    />
-                  </div>
-
-                  <form className="form-grid" onSubmit={saveChannelSettings}>
-                    <div className="inline-grid">
-                      <label className="field">
-                        <span>Display name</span>
-                        <input
-                          value={channelForm.displayName}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, displayName: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Numero E.164</span>
-                        <input
-                          value={channelForm.phoneE164}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, phoneE164: event.target.value }))
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div className="inline-grid">
-                      <label className="field">
-                        <span>Phone number ID</span>
-                        <input
-                          value={channelForm.phoneNumberId}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, phoneNumberId: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
-                        <span>WABA ID</span>
-                        <input
-                          value={channelForm.wabaId}
-                          onChange={(event) => setChannelForm((current) => ({ ...current, wabaId: event.target.value }))}
-                        />
-                      </label>
-                    </div>
-
-                    <label className="field">
-                      <span>Template names</span>
-                      <input
-                        value={channelForm.templateNames}
-                        onChange={(event) =>
-                          setChannelForm((current) => ({ ...current, templateNames: event.target.value }))
-                        }
-                      />
-                    </label>
-
-                    <div className="toggle-row">
-                      <label className="toggle-item">
-                        <input
-                          type="checkbox"
-                          checked={channelForm.templatesReady}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, templatesReady: event.target.checked }))
-                          }
-                        />
-                        <span>Plantillas listas</span>
-                      </label>
-                      <label className="toggle-item">
-                        <input
-                          type="checkbox"
-                          checked={channelForm.metaVerified}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, metaVerified: event.target.checked }))
-                          }
-                        />
-                        <span>Meta verificado</span>
-                      </label>
-                    </div>
-
-                    <label className="field">
-                      <span>Verify token</span>
-                      <input
-                        value={channelForm.verifyToken}
-                        onChange={(event) =>
-                          setChannelForm((current) => ({ ...current, verifyToken: event.target.value }))
-                        }
-                      />
-                    </label>
-
-                    <label className="field">
-                      <span>Token cifrado o referencia</span>
-                      <input
-                        value={channelForm.accessTokenEncrypted}
-                        onChange={(event) =>
-                          setChannelForm((current) => ({ ...current, accessTokenEncrypted: event.target.value }))
-                        }
-                      />
-                    </label>
-
-                    <button className="primary" type="submit">
-                      Guardar canal
-                    </button>
-                  </form>
-                </section>
-
-                <section className="surface-card dashboard-span-6 setting-card">
-                  <div className="setting-head">
-                    <div className="setting-title">
-                      <span className="material-symbols-outlined accent-icon">auto_awesome</span>
-                      <div>
-                        <h3>Google Reviews</h3>
-                        <p>Resenas, billing y estado comercial visibles en la misma card de automatizacion.</p>
-                      </div>
-                    </div>
-                    <StatusToggle
-                      label={dashboard.automation.reviewsReady ? "Active" : "Inactive"}
-                      checked={dashboard.automation.reviewsReady}
-                      disabled
-                    />
-                  </div>
-
-                  <form className="form-grid" onSubmit={saveBusinessSettings}>
-                    <div className="inline-grid">
-                      <label className="field">
-                        <span>Plan</span>
-                        <select
-                          value={businessForm.plan}
-                          onChange={(event) =>
-                            setBusinessForm((current) => ({ ...current, plan: event.target.value as PlanCode }))
-                          }
-                        >
-                          {Object.entries(planLabel).map(([value, label]) => (
-                            <option key={value} value={value}>
-                              {label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span>Billing status</span>
-                        <select
-                          value={businessForm.billingStatus}
-                          onChange={(event) =>
-                            setBusinessForm((current) => ({
-                              ...current,
-                              billingStatus: event.target.value as BillingStatus
-                            }))
-                          }
-                        >
-                          {Object.entries(billingLabel).map(([value, label]) => (
-                            <option key={value} value={value}>
-                              {label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-
-                    <label className="field">
-                      <span>Google review link</span>
-                      <input
-                        value={businessForm.googleReviewLink}
-                        onChange={(event) =>
-                          setBusinessForm((current) => ({ ...current, googleReviewLink: event.target.value }))
-                        }
-                      />
-                    </label>
-
-                    <label className="field">
-                      <span>Notas internas</span>
-                      <textarea
-                        value={businessForm.notes}
-                        onChange={(event) => setBusinessForm((current) => ({ ...current, notes: event.target.value }))}
-                      />
-                    </label>
-
-                    <div className="button-row">
-                      <button className="secondary" type="button" onClick={() => void openBillingLink("checkout")}>
-                        Checkout Stripe
-                      </button>
-                      <button className="primary" type="submit">
-                        Guardar negocio
-                      </button>
-                    </div>
-                  </form>
-                </section>
-
                 <section className="surface-card dashboard-span-8">
                   <div className="section-head">
                     <div>
                       <p className="eyebrow">Negocio</p>
-                      <h3>Perfil, plan y billing</h3>
+                      <h3>Perfil</h3>
                     </div>
                   </div>
 
@@ -1491,7 +1276,7 @@ function App() {
                   </div>
                 </section>
 
-                <section className="surface-card dashboard-span-8">
+                <section className="surface-card dashboard-span-12">
                   <div className="section-head">
                     <div>
                       <p className="eyebrow">Disponibilidad</p>
@@ -1575,91 +1360,131 @@ function App() {
                     </div>
                   </form>
                 </section>
-
-                <section className="surface-card dashboard-span-4">
-                  <div className="section-head">
-                    <div>
-                      <p className="eyebrow">Expansion</p>
-                      <h3>Alta de otro negocio</h3>
-                    </div>
-                  </div>
-
-                  <form className="form-grid" onSubmit={createBusiness}>
-                    <label className="field">
-                      <span>Nombre</span>
-                      <input
-                        value={newBusinessForm.name}
-                        onChange={(event) => setNewBusinessForm((current) => ({ ...current, name: event.target.value }))}
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Email</span>
-                      <input
-                        value={newBusinessForm.email}
-                        onChange={(event) =>
-                          setNewBusinessForm((current) => ({ ...current, email: event.target.value }))
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Telefono</span>
-                      <input
-                        value={newBusinessForm.phone}
-                        onChange={(event) =>
-                          setNewBusinessForm((current) => ({ ...current, phone: event.target.value }))
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Ciudad</span>
-                      <input
-                        value={newBusinessForm.city}
-                        onChange={(event) =>
-                          setNewBusinessForm((current) => ({ ...current, city: event.target.value }))
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Direccion</span>
-                      <input
-                        value={newBusinessForm.address}
-                        onChange={(event) =>
-                          setNewBusinessForm((current) => ({ ...current, address: event.target.value }))
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Plan</span>
-                      <select
-                        value={newBusinessForm.plan}
-                        onChange={(event) =>
-                          setNewBusinessForm((current) => ({ ...current, plan: event.target.value as PlanCode }))
-                        }
-                      >
-                        {Object.entries(planLabel).map(([value, label]) => (
-                          <option key={value} value={value}>
-                            {label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Review link</span>
-                      <input
-                        value={newBusinessForm.googleReviewLink}
-                        onChange={(event) =>
-                          setNewBusinessForm((current) => ({ ...current, googleReviewLink: event.target.value }))
-                        }
-                      />
-                    </label>
-                    <button className="primary" type="submit">
-                      Crear negocio
-                    </button>
-                  </form>
-                </section>
               </section>
             )}
           </>
+        )}
+
+        {dashboard && appointmentModalOpen && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <section className="modal-panel">
+              <div className="modal-head">
+                <div>
+                  <p className="eyebrow">Cita</p>
+                  <h3>Agendar cita</h3>
+                </div>
+                <button className="icon-button" type="button" onClick={() => setAppointmentModalOpen(false)}>
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+
+              <form className="form-grid" onSubmit={submitAppointment}>
+                <label className="field">
+                  <span>Cliente</span>
+                  <input
+                    value={contactSearch}
+                    placeholder={contactsById.get(appointmentForm.contactId)?.name || "Buscar cliente"}
+                    onChange={(event) => setContactSearch(event.target.value)}
+                  />
+                </label>
+                <div className="contact-suggestions">
+                  {filteredContacts.map((contact) => (
+                    <button
+                      key={contact.id}
+                      className={appointmentForm.contactId === contact.id ? "selected" : ""}
+                      type="button"
+                      onClick={() => {
+                        setAppointmentForm((current) => ({ ...current, contactId: contact.id }));
+                        setContactSearch(contact.name);
+                      }}
+                    >
+                      <strong>{contact.name}</strong>
+                      <span>{contact.phone}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <label className="field">
+                  <span>Servicio</span>
+                  <select
+                    value={appointmentForm.serviceId}
+                    onChange={(event) => setAppointmentForm((current) => ({ ...current, serviceId: event.target.value }))}
+                  >
+                    {dashboard.services.map((service) => (
+                      <option key={service.id} value={service.id}>
+                        {service.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="modal-calendar">
+                  <label className="field">
+                    <span>Fecha y hora</span>
+                    <input
+                      type="datetime-local"
+                      value={appointmentForm.startAtLocal}
+                      onChange={(event) => setAppointmentForm((current) => ({ ...current, startAtLocal: event.target.value }))}
+                    />
+                  </label>
+                </div>
+
+                <label className="field">
+                  <span>Notas</span>
+                  <textarea
+                    value={appointmentForm.notes}
+                    onChange={(event) => setAppointmentForm((current) => ({ ...current, notes: event.target.value }))}
+                  />
+                </label>
+
+                <button className="primary" type="submit">
+                  Guardar cita
+                </button>
+              </form>
+            </section>
+          </div>
+        )}
+
+        {dashboard && contactModalOpen && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <section className="modal-panel">
+              <div className="modal-head">
+                <div>
+                  <p className="eyebrow">Cliente</p>
+                  <h3>{editingContactId ? "Editar cliente" : "Nuevo cliente"}</h3>
+                </div>
+                <button className="icon-button" type="button" onClick={() => setContactModalOpen(false)}>
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+
+              <form className="form-grid" onSubmit={saveContact}>
+                <label className="field">
+                  <span>Nombre</span>
+                  <input value={contactForm.name} onChange={(event) => setContactForm((current) => ({ ...current, name: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>Telefono</span>
+                  <input value={contactForm.phone} onChange={(event) => setContactForm((current) => ({ ...current, phone: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>Email</span>
+                  <input value={contactForm.email} onChange={(event) => setContactForm((current) => ({ ...current, email: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>Tags</span>
+                  <input value={contactForm.tags} onChange={(event) => setContactForm((current) => ({ ...current, tags: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>Notas</span>
+                  <textarea value={contactForm.notes} onChange={(event) => setContactForm((current) => ({ ...current, notes: event.target.value }))} />
+                </label>
+                <button className="primary" type="submit">
+                  Guardar cliente
+                </button>
+              </form>
+            </section>
+          </div>
         )}
       </main>
     </div>
@@ -1783,6 +1608,106 @@ function CalendarDay({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CalendarWeek({
+  selectedDate,
+  weekDates,
+  appointments,
+  contactsById,
+  servicesById,
+  timezone,
+  onSelectDate
+}: {
+  selectedDate: string;
+  weekDates: string[];
+  appointments: Appointment[];
+  contactsById: Map<string, DashboardSummary["contacts"][number]>;
+  servicesById: Map<string, DashboardSummary["services"][number]>;
+  timezone: string;
+  onSelectDate: (date: string) => void;
+}) {
+  return (
+    <div className="calendar-week">
+      <div className="calendar-week-axis">
+        <span />
+        {weekDates.map((item) => (
+          <button
+            key={item}
+            className={item === selectedDate ? "week-column-head active" : "week-column-head"}
+            type="button"
+            onClick={() => onSelectDate(item)}
+          >
+            <span>{weekdayLabel[new Date(`${item}T00:00:00.000Z`).getUTCDay()]}</span>
+            <strong>{shortDateLabel(item)}</strong>
+          </button>
+        ))}
+      </div>
+      <div className="calendar-week-grid">
+        <div className="week-hours">
+          {calendarHours.map((hour) => (
+            <span key={hour}>{String(hour).padStart(2, "0")}:00</span>
+          ))}
+        </div>
+        <div className="week-columns">
+          {weekDates.map((item) => (
+            <div key={item} className="week-day-column">
+              {appointments
+                .filter((appointment) => appointment.startAt.slice(0, 10) === item)
+                .map((appointment) => (
+                  <article key={appointment.id} className={`week-event ${appointment.status}`}>
+                    <strong>{timeLabel(appointment.startAt, timezone)}</strong>
+                    <span>{contactsById.get(appointment.contactId)?.name || "Paciente"}</span>
+                    <small>{servicesById.get(appointment.serviceId)?.name || "Servicio"}</small>
+                  </article>
+                ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CalendarMonth({
+  selectedDate,
+  monthDates,
+  appointments,
+  contactsById,
+  onSelectDate
+}: {
+  selectedDate: string;
+  monthDates: Array<{ iso: string; inMonth: boolean }>;
+  appointments: Appointment[];
+  contactsById: Map<string, DashboardSummary["contacts"][number]>;
+  onSelectDate: (date: string) => void;
+}) {
+  return (
+    <div className="calendar-month">
+      {weekdayLabel.slice(1).concat(weekdayLabel[0]).map((label) => (
+        <span key={label} className="month-weekday">
+          {label}
+        </span>
+      ))}
+      {monthDates.map((item) => {
+        const dayAppointments = appointments.filter((appointment) => appointment.startAt.slice(0, 10) === item.iso);
+        return (
+          <button
+            key={item.iso}
+            className={`month-cell ${item.inMonth ? "" : "muted-month"} ${item.iso === selectedDate ? "active" : ""}`}
+            type="button"
+            onClick={() => onSelectDate(item.iso)}
+          >
+            <strong>{new Date(`${item.iso}T00:00:00.000Z`).getUTCDate()}</strong>
+            {dayAppointments.slice(0, 3).map((appointment) => (
+              <span key={appointment.id}>{contactsById.get(appointment.contactId)?.name || "Cita"}</span>
+            ))}
+            {dayAppointments.length > 3 && <small>+{dayAppointments.length - 3}</small>}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1919,3 +1844,201 @@ function AppointmentRow({
 }
 
 export default App;
+
+function AdminClientsView({
+  clients,
+  form,
+  loading,
+  planLabel,
+  billingLabel,
+  onRefresh,
+  onSubmit,
+  onFormChange
+}: {
+  clients: AdminClientSummary[];
+  form: typeof defaultAdminClientForm;
+  loading: boolean;
+  planLabel: Record<PlanCode, string>;
+  billingLabel: Record<BillingStatus, string>;
+  onRefresh: () => void;
+  onSubmit: (event: FormEvent) => void;
+  onFormChange: Dispatch<SetStateAction<typeof defaultAdminClientForm>>;
+}) {
+  return (
+    <section className="dashboard-grid">
+      <section className="surface-card dashboard-span-7">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Alta segura</p>
+            <h3>Nuevo cliente</h3>
+          </div>
+        </div>
+
+        <form className="form-grid" onSubmit={onSubmit}>
+          <div className="inline-grid">
+            <label className="field">
+              <span>Negocio</span>
+              <input
+                value={form.businessName}
+                onChange={(event) => onFormChange((current) => ({ ...current, businessName: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>Email negocio</span>
+              <input
+                type="email"
+                value={form.businessEmail}
+                onChange={(event) => onFormChange((current) => ({ ...current, businessEmail: event.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="inline-grid">
+            <label className="field">
+              <span>Telefono</span>
+              <input value={form.phone} onChange={(event) => onFormChange((current) => ({ ...current, phone: event.target.value }))} />
+            </label>
+            <label className="field">
+              <span>Ciudad</span>
+              <input value={form.city} onChange={(event) => onFormChange((current) => ({ ...current, city: event.target.value }))} />
+            </label>
+          </div>
+
+          <div className="inline-grid">
+            <label className="field">
+              <span>Direccion</span>
+              <input
+                value={form.address}
+                onChange={(event) => onFormChange((current) => ({ ...current, address: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>Timezone</span>
+              <input
+                value={form.timezone}
+                onChange={(event) => onFormChange((current) => ({ ...current, timezone: event.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="inline-grid">
+            <label className="field">
+              <span>Plan</span>
+              <select
+                value={form.plan}
+                onChange={(event) => onFormChange((current) => ({ ...current, plan: event.target.value as PlanCode }))}
+              >
+                {Object.entries(planLabel).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Billing</span>
+              <select
+                value={form.billingStatus}
+                onChange={(event) =>
+                  onFormChange((current) => ({ ...current, billingStatus: event.target.value as BillingStatus }))
+                }
+              >
+                {Object.entries(billingLabel).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="field">
+            <span>Google review link</span>
+            <input
+              value={form.googleReviewLink}
+              onChange={(event) => onFormChange((current) => ({ ...current, googleReviewLink: event.target.value }))}
+            />
+          </label>
+
+          <div className="inline-grid">
+            <label className="field">
+              <span>Nombre acceso</span>
+              <input
+                autoComplete="off"
+                value={form.ownerName}
+                onChange={(event) => onFormChange((current) => ({ ...current, ownerName: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>Email acceso</span>
+              <input
+                type="email"
+                autoComplete="off"
+                value={form.ownerEmail}
+                onChange={(event) => onFormChange((current) => ({ ...current, ownerEmail: event.target.value }))}
+              />
+            </label>
+          </div>
+
+          <label className="field">
+            <span>Password inicial</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={form.ownerPassword}
+              onChange={(event) => onFormChange((current) => ({ ...current, ownerPassword: event.target.value }))}
+            />
+          </label>
+
+          <label className="field">
+            <span>Notas internas</span>
+            <textarea value={form.notes} onChange={(event) => onFormChange((current) => ({ ...current, notes: event.target.value }))} />
+          </label>
+
+          <button className="primary" type="submit">
+            Crear cliente
+          </button>
+        </form>
+      </section>
+
+      <section className="surface-card dashboard-span-5">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Clientes</p>
+            <h3>Negocios activos</h3>
+          </div>
+          <button className="ghost-button" type="button" onClick={onRefresh}>
+            Actualizar
+          </button>
+        </div>
+
+        <div className="client-list">
+          {loading ? (
+            <div className="empty-card">Cargando clientes...</div>
+          ) : clients.length ? (
+            clients.map((client) => (
+              <article key={client.business.id} className="client-card">
+                <div>
+                  <strong>{client.business.name}</strong>
+                  <span>{client.business.email}</span>
+                </div>
+                <div className="client-meta">
+                  <span>{planLabel[client.business.plan]}</span>
+                  <span>{billingLabel[client.business.billingStatus]}</span>
+                  <span>{moneyLabel(client.business.planPriceMonthly)}</span>
+                </div>
+                <div className="client-users">
+                  {client.users.map((user) => (
+                    <span key={user.id}>{user.email}</span>
+                  ))}
+                </div>
+              </article>
+            ))
+          ) : (
+            <EmptyState icon="business_center" title="Sin clientes" detail="Crea el primer negocio desde el formulario." />
+          )}
+        </div>
+      </section>
+    </section>
+  );
+}

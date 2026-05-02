@@ -57,6 +57,10 @@ export class AuthService {
   }
 
   async autoLogin() {
+    if (process.env.ALLOW_AUTO_LOGIN !== "true") {
+      throw new Error("Acceso automatico deshabilitado");
+    }
+
     const users = await this.store.getUsers();
     let user =
       users.find((candidate) => candidate.active && candidate.email.toLowerCase() === "demo@tarracowebs.es") ??
@@ -134,6 +138,56 @@ export class AuthService {
       token: this.issueToken(user),
       user: this.sanitizeUser(user),
       businesses
+    };
+  }
+
+  async createClient(input: {
+    businessName: string;
+    businessEmail: string;
+    phone: string;
+    city: string;
+    address?: string;
+    timezone?: string;
+    notes?: string;
+    plan: PlanCode;
+    googleReviewLink: string;
+    billingStatus?: Business["billingStatus"];
+    ownerName: string;
+    ownerEmail: string;
+    ownerPassword: string;
+  }) {
+    const existingOwner = await this.store.findUserByEmail(input.ownerEmail);
+    if (existingOwner) {
+      throw new Error("Ya existe un usuario con ese email");
+    }
+
+    const business = await this.store.createBusiness({
+      name: input.businessName,
+      email: input.businessEmail,
+      phone: input.phone,
+      city: input.city,
+      address: input.address,
+      timezone: input.timezone || "Europe/Madrid",
+      notes: input.notes || "",
+      plan: input.plan,
+      planPriceMonthly: planPriceMap[input.plan],
+      googleReviewLink: input.googleReviewLink,
+      billingStatus: input.billingStatus || "trial",
+      active: true
+    });
+
+    const user = await this.store.createUser({
+      email: input.ownerEmail,
+      name: input.ownerName,
+      passwordHash: hashPasswordSync(input.ownerPassword),
+      role: "business_admin",
+      businessIds: [business.id],
+      active: true
+    });
+
+    return {
+      business,
+      user: this.sanitizeUser(user)
     };
   }
 }
