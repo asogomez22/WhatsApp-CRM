@@ -12,7 +12,7 @@ services:
       PORT: "3001"
       DATA_DIR: "/app/data"
       APP_URL: "${APP_URL:-http://localhost:3001}"
-      JWT_SECRET: "${JWT_SECRET:-change-me}"
+      JWT_SECRET: "${JWT_SECRET:-local-dev-secret-with-more-than-32-chars}"
       WHATSAPP_API_VERSION: "${WHATSAPP_API_VERSION:-v22.0}"
       WHATSAPP_ACCESS_TOKEN: "${WHATSAPP_ACCESS_TOKEN:-}"
       DATABASE_URL: "${DATABASE_URL:-}"

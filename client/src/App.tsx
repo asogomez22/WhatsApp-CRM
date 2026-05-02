@@ -38,28 +38,28 @@ const viewMeta: Record<
 > = {
   overview: {
     eyebrow: "Dashboard operativo",
-    title: "Vista general",
-    description: "Salud del negocio, onboarding, actividad y automatizaciones visibles en una sola capa operativa."
+    title: "Centro de control",
+    description: "Agenda, clientes, automatizaciones y facturacion organizadas para decidir rapido sin perder contexto."
   },
   agenda: {
     eyebrow: "Calendario",
-    title: "Citas",
-    description: "Vista diaria y semanal con alta de citas desde un modal enfocado."
+    title: "Agenda",
+    description: "Planificacion diaria, semanal y mensual con estados visibles y alta de citas desde un flujo enfocado."
   },
   clients: {
     eyebrow: "CRM",
     title: "Clientes",
-    description: "Listado editable de clientes con altas rapidas, edicion y eliminacion."
+    description: "Directorio comercial editable, preparado para seguimiento por telefono, email y etiquetas."
   },
   setup: {
     eyebrow: "Ajustes",
     title: "Configuracion",
-    description: "Perfil del negocio, servicios y disponibilidad operativa."
+    description: "Perfil del negocio, canal de WhatsApp, servicios, disponibilidad y reglas de automatizacion."
   },
   admin: {
     eyebrow: "Platform admin",
     title: "Clientes y planes",
-    description: "Alta de clientes con credenciales propias, plan asignado y acceso separado por negocio."
+    description: "Alta de clientes, credenciales, plan contratado y estado de facturacion desde una sola vista."
   }
 };
 
@@ -862,11 +862,22 @@ function App() {
         <section className="login-panel">
           <div className="login-copy">
             <p className="eyebrow">TarracoWebs · WhatsApp CRM</p>
-            <h1>Inicio de sesion</h1>
-            <p className="muted">Acceso con credenciales y token JWT para clientes y administradores.</p>
+            <h1>Agenda, WhatsApp y clientes en un unico panel.</h1>
+            <p className="muted">
+              Accede al centro operativo para gestionar citas, automatizaciones anti no-show y solicitudes de resena.
+            </p>
+            <div className="login-proof-grid" aria-label="Capacidades principales">
+              <span>Agenda en tiempo real</span>
+              <span>Flujos WhatsApp</span>
+              <span>Facturacion SaaS</span>
+            </div>
           </div>
 
           <form className="login-form" onSubmit={submitLogin}>
+            <div>
+              <p className="eyebrow">Acceso privado</p>
+              <h2>Iniciar sesion</h2>
+            </div>
             {pageError && <div className="error-banner">{pageError}</div>}
             <label className="field">
               <span>Email</span>
@@ -889,6 +900,7 @@ function App() {
             <button className="primary" type="submit" disabled={loginLoading}>
               {loginLoading ? "Entrando..." : "Entrar"}
             </button>
+            <p className="form-footnote">Usa las credenciales asignadas a tu negocio o usuario administrador.</p>
           </form>
         </section>
       </div>
@@ -902,7 +914,7 @@ function App() {
           <div className="brand-mark">{selectedBusiness?.name?.slice(0, 1) || "T"}</div>
           <div>
             <h2>{selectedBusiness?.name || "TarracoWebs CRM"}</h2>
-            <p>CRM</p>
+            <p>Operaciones WhatsApp</p>
           </div>
         </div>
 
@@ -925,6 +937,7 @@ function App() {
             <span className="eyebrow">Sesion</span>
             <strong>{session.user.name}</strong>
             <span className="muted">{session.user.email}</span>
+            <span className="role-pill">{session.user.role.replace("_", " ")}</span>
           </div>
           <button className="ghost-button sidebar-logout" type="button" onClick={logout}>
             Cerrar sesion
@@ -990,7 +1003,13 @@ function App() {
               <>
                 <section className="metrics-grid">
                   <MetricCard
-                    label="Citas pendientes"
+                    label="Citas hoy"
+                    value={String(dashboard.metrics.todayAppointments)}
+                    description="Actividad del dia seleccionado"
+                    icon="event"
+                  />
+                  <MetricCard
+                    label="Pendientes"
                     value={String(pendingAppointments)}
                     description="Necesitan primera revision"
                     icon="pending_actions"
@@ -1007,17 +1026,174 @@ function App() {
                     description="Confirmadas o completadas"
                     icon="verified"
                   />
+                  <MetricCard
+                    label="Leads"
+                    value={String(dashboard.metrics.leadsTracked)}
+                    description="Contactos captados en CRM"
+                    icon="person_add"
+                  />
+                  <MetricCard
+                    label="Confirmacion"
+                    value={`${dashboard.metrics.confirmedRate}%`}
+                    description="Ratio operativo de asistencia"
+                    icon="monitoring"
+                  />
                 </section>
 
                 <section className="dashboard-grid overview-grid">
+                  <section className="surface-card dashboard-span-8 command-card">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Operacion</p>
+                        <h3>Prioridad inmediata</h3>
+                      </div>
+                      <span className={`status-badge ${nextAppointment?.status || "scheduled"}`}>
+                        {nextAppointment ? statusLabel[nextAppointment.status] : "Sin urgencias"}
+                      </span>
+                    </div>
+
+                    <div className="highlight-callout">
+                      <div>
+                        <span className="eyebrow">Siguiente cita</span>
+                        <strong>
+                          {nextAppointment
+                            ? contactsById.get(nextAppointment.contactId)?.name || "Cliente"
+                            : "Agenda despejada"}
+                        </strong>
+                        <p>
+                          {nextAppointment
+                            ? `${dateTimeLabel(nextAppointment.startAt, dashboard.business.timezone)} · ${
+                                servicesById.get(nextAppointment.serviceId)?.name || "Servicio"
+                              }`
+                            : "No hay citas pendientes, programadas o confirmadas para esta fecha."}
+                        </p>
+                      </div>
+                      <button className="primary" type="button" onClick={() => setView("agenda")}>
+                        Abrir agenda
+                      </button>
+                    </div>
+
+                    <div className="mini-stats">
+                      <MiniStat label="No-shows" value={String(dashboard.metrics.noShows)} />
+                      <MiniStat label="Resenas pendientes" value={String(dashboard.metrics.reviewsPending)} />
+                      <MiniStat label="Flujos abiertos" value={String(dashboard.metrics.whatsappOpenFlows)} />
+                    </div>
+                  </section>
+
+                  <section className="surface-card dashboard-span-4">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Onboarding</p>
+                        <h3>{dashboard.onboarding.completed}/{dashboard.onboarding.total} completado</h3>
+                      </div>
+                    </div>
+                    <div className="progress-rail" aria-label={`Onboarding ${dashboard.onboarding.completionRatio}% completado`}>
+                      <span style={{ width: `${dashboard.onboarding.completionRatio}%` }} />
+                    </div>
+                    <div className="checklist-list">
+                      {dashboard.onboarding.items.slice(0, 4).map((item) => (
+                        <ChecklistRow key={item.id} item={item} />
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="surface-card dashboard-span-7">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Automatizaciones</p>
+                        <h3>Senales del sistema</h3>
+                      </div>
+                      <button className="secondary" type="button" onClick={() => void runAutomations()}>
+                        Procesar ahora
+                      </button>
+                    </div>
+                    <div className="signal-grid">
+                      <SignalCard label="Resenas" status={dashboard.automation.reviewsReady} detail="Solicitud tras cita completada." />
+                      <SignalCard label="Recordatorios" status={dashboard.automation.remindersReady} detail="Anti no-show antes de la cita." />
+                      <SignalCard label="Citas automaticas" status={dashboard.automation.autoBookingReady} detail="Captacion guiada por WhatsApp." />
+                      <SignalCard label="Handoff" status={dashboard.automation.handoffReady} detail="Escalada a atencion humana." />
+                    </div>
+                  </section>
+
+                  <section className="surface-card dashboard-span-5">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">WhatsApp</p>
+                        <h3>Simulador de flujo</h3>
+                      </div>
+                    </div>
+                    <form className="form-grid" onSubmit={simulateMessage}>
+                      <label className="field">
+                        <span>Telefono origen</span>
+                        <input
+                          value={simulateForm.fromPhone}
+                          onChange={(event) => setSimulateForm((current) => ({ ...current, fromPhone: event.target.value }))}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Mensaje</span>
+                        <input
+                          value={simulateForm.text}
+                          onChange={(event) => setSimulateForm((current) => ({ ...current, text: event.target.value }))}
+                        />
+                      </label>
+                      <button className="primary" type="submit">
+                        Simular mensaje
+                      </button>
+                    </form>
+                  </section>
+
+                  <section className="surface-card dashboard-span-6">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Actividad reciente</p>
+                        <h3>Conversaciones</h3>
+                      </div>
+                    </div>
+                    <div className="message-stack">
+                      {dashboard.recentMessages.length ? (
+                        dashboard.recentMessages.slice(0, 5).map((message) => (
+                          <MessageRow
+                            key={message.id}
+                            message={message}
+                            contactName={contactsById.get(message.contactId)?.name || "Cliente"}
+                            timezone={dashboard.business.timezone}
+                          />
+                        ))
+                      ) : (
+                        <EmptyState icon="forum" title="Sin mensajes" detail="Las conversaciones recientes apareceran aqui." />
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="surface-card dashboard-span-6">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Facturacion</p>
+                        <h3>{billingLabel[dashboard.billing.status]}</h3>
+                      </div>
+                    </div>
+                    <div className="billing-panel">
+                      <MiniStat label="Plan" value={planLabel[dashboard.business.plan]} />
+                      <MiniStat label="Mensualidad" value={moneyLabel(dashboard.business.planPriceMonthly)} />
+                    </div>
+                    <div className="button-row">
+                      <button className="secondary" type="button" onClick={() => void openBillingLink("checkout")}>
+                        Abrir checkout
+                      </button>
+                      <button className="ghost-button" type="button" onClick={() => void openBillingLink("portal")}>
+                        Portal cliente
+                      </button>
+                    </div>
+                  </section>
+
                   <section className="surface-card dashboard-span-12">
                     <div className="section-head">
                       <div>
-                        <p className="eyebrow">Panel general</p>
-                        <h3>Atajos</h3>
+                        <p className="eyebrow">Navegacion rapida</p>
+                        <h3>Atajos principales</h3>
                       </div>
                     </div>
-
                     <div className="shortcut-grid">
                       <button className="shortcut-card" type="button" onClick={() => setView("agenda")}>
                         <span className="material-symbols-outlined">calendar_month</span>
@@ -1050,11 +1226,21 @@ function App() {
                     </div>
                     <div className="calendar-toolbar">
                       <div className="date-nav" aria-label="Navegacion de fecha">
-                        <button className="icon-button" type="button" onClick={() => setDate((current) => addDays(current, -1))}>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="Fecha anterior"
+                          onClick={() => setDate((current) => addDays(current, -1))}
+                        >
                           <span className="material-symbols-outlined">chevron_left</span>
                         </button>
                         <input className="calendar-date-input" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-                        <button className="icon-button" type="button" onClick={() => setDate((current) => addDays(current, 1))}>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="Fecha siguiente"
+                          onClick={() => setDate((current) => addDays(current, 1))}
+                        >
                           <span className="material-symbols-outlined">chevron_right</span>
                         </button>
                       </div>
@@ -1279,6 +1465,93 @@ function App() {
                 <section className="surface-card dashboard-span-12">
                   <div className="section-head">
                     <div>
+                      <p className="eyebrow">Canal WhatsApp</p>
+                      <h3>Conexion y plantillas</h3>
+                    </div>
+                    <div className="toggle-row">
+                      <StatusToggle
+                        label="Activo"
+                        checked={channelForm.active}
+                        onChange={(active) => setChannelForm((current) => ({ ...current, active }))}
+                      />
+                      <StatusToggle
+                        label="Meta verificado"
+                        checked={channelForm.metaVerified}
+                        onChange={(metaVerified) => setChannelForm((current) => ({ ...current, metaVerified }))}
+                      />
+                      <StatusToggle
+                        label="Templates listos"
+                        checked={channelForm.templatesReady}
+                        onChange={(templatesReady) => setChannelForm((current) => ({ ...current, templatesReady }))}
+                      />
+                    </div>
+                  </div>
+
+                  <form className="form-grid" onSubmit={saveChannelSettings}>
+                    <div className="inline-grid">
+                      <label className="field">
+                        <span>Telefono E.164</span>
+                        <input
+                          value={channelForm.phoneE164}
+                          onChange={(event) => setChannelForm((current) => ({ ...current, phoneE164: event.target.value }))}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Nombre visible</span>
+                        <input
+                          value={channelForm.displayName}
+                          onChange={(event) => setChannelForm((current) => ({ ...current, displayName: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="inline-grid">
+                      <label className="field">
+                        <span>Phone number ID</span>
+                        <input
+                          value={channelForm.phoneNumberId}
+                          onChange={(event) => setChannelForm((current) => ({ ...current, phoneNumberId: event.target.value }))}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>WABA ID</span>
+                        <input
+                          value={channelForm.wabaId}
+                          onChange={(event) => setChannelForm((current) => ({ ...current, wabaId: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="inline-grid">
+                      <label className="field">
+                        <span>Verify token</span>
+                        <input
+                          value={channelForm.verifyToken}
+                          onChange={(event) => setChannelForm((current) => ({ ...current, verifyToken: event.target.value }))}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Plantillas</span>
+                        <input
+                          value={channelForm.templateNames}
+                          onChange={(event) => setChannelForm((current) => ({ ...current, templateNames: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Access token cifrado</span>
+                      <textarea
+                        value={channelForm.accessTokenEncrypted}
+                        onChange={(event) => setChannelForm((current) => ({ ...current, accessTokenEncrypted: event.target.value }))}
+                      />
+                    </label>
+                    <button className="primary" type="submit">
+                      Guardar canal
+                    </button>
+                  </form>
+                </section>
+
+                <section className="surface-card dashboard-span-12">
+                  <div className="section-head">
+                    <div>
                       <p className="eyebrow">Disponibilidad</p>
                       <h3>Huecos editables</h3>
                     </div>
@@ -1373,7 +1646,7 @@ function App() {
                   <p className="eyebrow">Cita</p>
                   <h3>Agendar cita</h3>
                 </div>
-                <button className="icon-button" type="button" onClick={() => setAppointmentModalOpen(false)}>
+                <button className="icon-button" type="button" aria-label="Cerrar modal de cita" onClick={() => setAppointmentModalOpen(false)}>
                   <span className="material-symbols-outlined">close</span>
                 </button>
               </div>
@@ -1453,7 +1726,7 @@ function App() {
                   <p className="eyebrow">Cliente</p>
                   <h3>{editingContactId ? "Editar cliente" : "Nuevo cliente"}</h3>
                 </div>
-                <button className="icon-button" type="button" onClick={() => setContactModalOpen(false)}>
+                <button className="icon-button" type="button" aria-label="Cerrar modal de cliente" onClick={() => setContactModalOpen(false)}>
                   <span className="material-symbols-outlined">close</span>
                 </button>
               </div>
@@ -1773,6 +2046,8 @@ function StatusToggle({
       <button
         className={checked ? "toggle-switch on" : "toggle-switch"}
         type="button"
+        aria-label={label}
+        aria-pressed={checked}
         disabled={disabled}
         onClick={() => onChange?.(!checked)}
       >
