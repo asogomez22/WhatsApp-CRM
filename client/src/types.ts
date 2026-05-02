@@ -172,3 +172,8 @@ export interface BootstrapState {
   demoUser: string;
   demoPassword: string;
 }
+
+export interface AdminClientSummary {
+  business: Business;
+  users: SessionUser[];
+}

@@ -1,5 +1,6 @@
 import {
   Appointment,
+  AdminClientSummary,
   AuthSession,
   BootstrapState,
   Business,
@@ -14,13 +15,22 @@ const TOKEN_STORAGE_KEY = "whatsapp-crm-auth-token";
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
+    let message = text;
 
     try {
       const parsed = JSON.parse(text) as { message?: string };
-      throw new Error(parsed.message || "Request failed");
+      if (parsed.message) {
+        message = parsed.message;
+      }
     } catch {
-      throw new Error(text || "Request failed");
+      message = text;
     }
+
+    throw new Error(message || "Request failed");
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return response.json() as Promise<T>;
@@ -103,6 +113,31 @@ class ApiClient {
     return this.request<Business[]>("/api/businesses");
   }
 
+  getAdminClients() {
+    return this.request<AdminClientSummary[]>("/api/admin/clients");
+  }
+
+  createAdminClient(body: {
+    businessName: string;
+    businessEmail: string;
+    phone: string;
+    city: string;
+    address?: string;
+    timezone?: string;
+    notes?: string;
+    plan: Business["plan"];
+    googleReviewLink: string;
+    billingStatus?: Business["billingStatus"];
+    ownerName: string;
+    ownerEmail: string;
+    ownerPassword: string;
+  }) {
+    return this.request<{ business: Business; user: AuthSession["user"] }>("/api/admin/clients", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+  }
+
   createBusiness(body: {
     name: string;
     email: string;
@@ -162,6 +197,23 @@ class ApiClient {
     return this.request<Contact>(`/api/businesses/${businessId}/contacts`, {
       method: "POST",
       body: JSON.stringify(body)
+    });
+  }
+
+  updateContact(
+    businessId: string,
+    contactId: string,
+    body: Partial<Pick<Contact, "name" | "phone" | "email" | "notes" | "tags">>
+  ) {
+    return this.request<Contact>(`/api/businesses/${businessId}/contacts/${contactId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body)
+    });
+  }
+
+  deleteContact(businessId: string, contactId: string) {
+    return this.request<void>(`/api/businesses/${businessId}/contacts/${contactId}`, {
+      method: "DELETE"
     });
   }
 
