@@ -19,10 +19,12 @@ const PLATFORM_ADMIN_EMAIL = "asogomez22@gmail.com";
 const weekdayLabel = ["Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"];
 const calendarHours = Array.from({ length: 12 }, (_, index) => index + 8);
 const viewTabs = [
-  { id: "overview", label: "Resumen" },
-  { id: "agenda", label: "Agenda" },
-  { id: "inbox", label: "WhatsApp" },
-  { id: "setup", label: "Ajustes" }
+  { id: "overview", label: "Resumen", icon: "dashboard" },
+  { id: "agenda", label: "Agenda", icon: "calendar_month" },
+  { id: "clients", label: "Clientes", icon: "groups" },
+  { id: "inbox", label: "WhatsApp", icon: "forum" },
+  { id: "setup", label: "Ajustes", icon: "settings" },
+  { id: "admin", label: "Admin", icon: "admin_panel_settings" }
 ] as const;
 
 type ViewId = (typeof viewTabs)[number]["id"];
@@ -50,6 +52,11 @@ const viewMeta: Record<
     eyebrow: "CRM",
     title: "Clientes",
     description: "Directorio comercial editable, preparado para seguimiento por telefono, email y etiquetas."
+  },
+  inbox: {
+    eyebrow: "WhatsApp",
+    title: "Conversaciones",
+    description: "Mensajes recientes y pruebas del flujo automatizado desde un unico lugar."
   },
   setup: {
     eyebrow: "Ajustes",
@@ -1207,7 +1214,6 @@ function App() {
             <h2>WhatsApp CRM</h2>
             <span className="muted">Control diario de clientes, agenda y automatizaciones.</span>
           </div>
-        </div>
 
         <nav className="sidebar-nav">
           {visibleTabs.map((tab) => (
@@ -1706,7 +1712,6 @@ function App() {
                     </div>
                   </section>
                 </section>
-              </>
             )}
 
             {view === "agenda" && (
@@ -2130,6 +2135,7 @@ function App() {
             )}
           </>
         )}
+        </main>
 
         {dashboard && appointmentModalOpen && (
           <div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -2254,6 +2260,7 @@ function App() {
         )}
       </main>
     </div>
+    </div>
   );
 }
 
@@ -2261,18 +2268,20 @@ function MetricCard({
   label,
   value,
   description,
-  icon
+  icon,
+  tone
 }: {
   label: string;
   value: string;
   description: string;
-  icon: string;
+  icon?: string;
+  tone?: string;
 }) {
   return (
-    <article className="metric-card">
+    <article className={tone ? `metric-card ${tone}` : "metric-card"}>
       <div className="metric-card-head">
         <span>{label}</span>
-        <span className="material-symbols-outlined">{icon}</span>
+        {icon && <span className="material-symbols-outlined">{icon}</span>}
       </div>
       <strong>{value}</strong>
       <p>{description}</p>
