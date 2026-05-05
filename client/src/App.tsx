@@ -303,9 +303,7 @@ function App() {
       businesses: nextSession.businesses
     });
     setSelectedBusinessId(nextSession.businesses[0]?.id || "");
-    if (!nextSession.businesses.length && nextSession.user.role === "platform_admin") {
-      setView("admin");
-    }
+    setView(nextSession.user.role === "platform_admin" && !nextSession.businesses.length ? "admin" : "overview");
     setDashboard(null);
     setPageError(null);
     setNotice(null);
