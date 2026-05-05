@@ -20,6 +20,7 @@ import { createSeedData } from "./seed.js";
 
 const DEFAULT_DB_PATH = fileURLToPath(new URL("../data/app-db.json", import.meta.url));
 const APP_STATE_KEY = "primary";
+const PLATFORM_ADMIN_EMAIL = "asogomez22@gmail.com";
 const planPriceMap = {
   reviews: 39,
   anti_no_show: 49,
@@ -166,6 +167,7 @@ export class DataStore {
       })),
       users: (input.users ?? []).map((user) => ({
         ...user,
+        role: user.email.toLowerCase() === PLATFORM_ADMIN_EMAIL ? "platform_admin" : user.role,
         businessIds: user.businessIds ?? [],
         active: user.active ?? true,
         updatedAt: user.updatedAt ?? user.createdAt ?? nowIso

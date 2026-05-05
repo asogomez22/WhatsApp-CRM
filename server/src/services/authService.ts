@@ -3,6 +3,7 @@ import { AppUser, Business, PlanCode, UserRole } from "../types.js";
 import { hashPasswordSync, signToken, verifyPassword, verifyToken } from "../utils/authCrypto.js";
 
 const DEFAULT_GOOGLE_REVIEW_LINK = "https://g.page/r/demo-review-link";
+const PLATFORM_ADMIN_EMAIL = "asogomez22@gmail.com";
 
 const planPriceMap: Record<PlanCode, number> = {
   reviews: 39,
@@ -70,7 +71,7 @@ export class AuthService {
     const hasUsers = await this.store.hasUsers();
     const existingBusinesses = await this.store.getBusinesses();
     const shouldClaimExistingBusinesses = !hasUsers && existingBusinesses.length > 0;
-    const role: UserRole = hasUsers ? "business_admin" : "platform_admin";
+    const role: UserRole = input.email.toLowerCase() === PLATFORM_ADMIN_EMAIL || !hasUsers ? "platform_admin" : "business_admin";
 
     const businesses = shouldClaimExistingBusinesses
       ? existingBusinesses
