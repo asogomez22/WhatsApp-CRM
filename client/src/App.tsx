@@ -482,8 +482,12 @@ function App() {
   );
 
   const selectedAdminBusiness = useMemo(
-    () => subscribedBusinesses.find((business) => business.id === selectedBusinessId) ?? subscribedBusinesses[0] ?? null,
-    [selectedBusinessId, subscribedBusinesses]
+    () =>
+      session?.businesses.find((business) => business.id === selectedBusinessId) ??
+      subscribedBusinesses[0] ??
+      session?.businesses[0] ??
+      null,
+    [selectedBusinessId, session?.businesses, subscribedBusinesses]
   );
 
   const adminMetrics = useMemo(() => {
@@ -1015,15 +1019,14 @@ function App() {
           <header className="hero-panel admin-hero">
             <div className="hero-copy">
               <p className="eyebrow">Consola admin</p>
-              <h1>Negocios suscritos</h1>
+              <h1>Alta y control de clientes SaaS</h1>
               <p className="hero-description">
-                Vista limpia de plataforma para revisar suscripciones, planes y datos del negocio. No carga agenda,
-                citas ni conversaciones operativas.
+                Crea el negocio, asigna el plan y deja al usuario activo con su contraseña inicial en una sola operacion.
               </p>
               <div className="hero-pill-row">
                 <span className="hero-pill">{adminMetrics.subscribedCount} negocios</span>
                 <span className="hero-pill accent">{moneyLabel(adminMetrics.monthlyRevenue)} / mes</span>
-                <span className="hero-pill">Admin: {session.user.email}</span>
+                <span className="hero-pill">{adminClients.length} altas totales</span>
               </div>
             </div>
 
@@ -1043,10 +1046,10 @@ function App() {
           {notice && <div className="notice-banner">{notice}</div>}
 
           <section className="metrics-grid admin-metrics">
-            <MetricCard label="Suscritos" value={String(adminMetrics.subscribedCount)} description="Activos con billing configurado" tone="teal" />
-            <MetricCard label="MRR" value={moneyLabel(adminMetrics.monthlyRevenue)} description="Planes activos o en trial" tone="ink" />
-            <MetricCard label="Activos" value={String(adminMetrics.activeSubscriptions)} description="Billing marcado como activo" tone="sage" />
-            <MetricCard label="Pendientes" value={String(adminMetrics.pendingSubscriptions)} description="Pagos past due para revisar" tone="rust" />
+            <MetricCard label="Suscritos" value={String(adminMetrics.subscribedCount)} description="Activos con billing configurado" icon="storefront" tone="teal" />
+            <MetricCard label="MRR" value={moneyLabel(adminMetrics.monthlyRevenue)} description="Planes activos o en trial" icon="payments" tone="ink" />
+            <MetricCard label="Activos" value={String(adminMetrics.activeSubscriptions)} description="Billing marcado como activo" icon="verified" tone="sage" />
+            <MetricCard label="Pendientes" value={String(adminMetrics.pendingSubscriptions)} description="Pagos past due para revisar" icon="warning" tone="rust" />
           </section>
 
           <section className="admin-layout">
@@ -1054,14 +1057,18 @@ function App() {
               <div className="section-head">
                 <div>
                   <p className="eyebrow">Cartera</p>
-                  <h3>Negocios suscritos</h3>
+                  <h3>Clientes creados</h3>
                 </div>
-                <span className="muted">{subscribedBusinesses.length} visibles</span>
+                <button className="ghost-button" type="button" onClick={() => void refreshAdminClients()}>
+                  {loadingAdminClients ? "Actualizando..." : "Actualizar"}
+                </button>
               </div>
 
               <div className="business-list">
-                {subscribedBusinesses.length ? (
-                  subscribedBusinesses.map((business) => (
+                {loadingAdminClients ? (
+                  <div className="empty-card">Cargando clientes...</div>
+                ) : adminClients.length ? (
+                  adminClients.map(({ business, users }) => (
                     <button
                       key={business.id}
                       className={selectedAdminBusiness?.id === business.id ? "business-card active" : "business-card"}
@@ -1070,14 +1077,14 @@ function App() {
                     >
                       <span className="business-card-main">
                         <strong>{business.name}</strong>
-                        <span>{business.city} · {planLabel[business.plan]}</span>
+                        <span>{business.city} · {planLabel[business.plan]} · {users.length} usuario{users.length === 1 ? "" : "s"}</span>
                       </span>
                       <span className={`status-chip ${business.billingStatus}`}>{billingLabel[business.billingStatus]}</span>
-                      <span className="muted">{moneyLabel(business.planPriceMonthly)} / mes</span>
+                      <span className="muted">{users[0]?.email || business.email}</span>
                     </button>
                   ))
                 ) : (
-                  <div className="empty-card">Todavia no hay negocios suscritos con billing configurado.</div>
+                  <div className="empty-card">Todavia no hay clientes creados desde la consola admin.</div>
                 )}
               </div>
             </section>
@@ -1157,45 +1164,87 @@ function App() {
               <section className="panel compact-admin-panel">
                 <div className="section-head">
                   <div>
-                    <p className="eyebrow">Alta manual</p>
-                    <h3>Nuevo suscriptor</h3>
+                    <p className="eyebrow">Alta directa</p>
+                    <h3>Nuevo cliente con acceso</h3>
                   </div>
                 </div>
 
-                <form className="form-grid" onSubmit={createBusiness}>
+                <div className="admin-onboarding-steps" aria-label="Proceso de alta">
+                  <span>1. Negocio</span>
+                  <span>2. Plan</span>
+                  <span>3. Usuario activo</span>
+                </div>
+
+                <form className="form-grid admin-create-form" onSubmit={createAdminClient}>
                   <label className="field">
                     <span>Negocio</span>
-                    <input value={newBusinessForm.name} onChange={(event) => setNewBusinessForm((current) => ({ ...current, name: event.target.value }))} />
+                    <input value={adminClientForm.businessName} onChange={(event) => setAdminClientForm((current) => ({ ...current, businessName: event.target.value }))} required />
                   </label>
                   <div className="inline-grid">
                     <label className="field">
-                      <span>Email</span>
-                      <input value={newBusinessForm.email} onChange={(event) => setNewBusinessForm((current) => ({ ...current, email: event.target.value }))} />
+                      <span>Email negocio</span>
+                      <input type="email" value={adminClientForm.businessEmail} onChange={(event) => setAdminClientForm((current) => ({ ...current, businessEmail: event.target.value }))} required />
                     </label>
                     <label className="field">
                       <span>Telefono</span>
-                      <input value={newBusinessForm.phone} onChange={(event) => setNewBusinessForm((current) => ({ ...current, phone: event.target.value }))} />
+                      <input value={adminClientForm.phone} onChange={(event) => setAdminClientForm((current) => ({ ...current, phone: event.target.value }))} required />
                     </label>
                   </div>
                   <div className="inline-grid">
                     <label className="field">
                       <span>Ciudad</span>
-                      <input value={newBusinessForm.city} onChange={(event) => setNewBusinessForm((current) => ({ ...current, city: event.target.value }))} />
+                      <input value={adminClientForm.city} onChange={(event) => setAdminClientForm((current) => ({ ...current, city: event.target.value }))} required />
                     </label>
                     <label className="field">
                       <span>Plan</span>
-                      <select value={newBusinessForm.plan} onChange={(event) => setNewBusinessForm((current) => ({ ...current, plan: event.target.value as PlanCode }))}>
+                      <select value={adminClientForm.plan} onChange={(event) => setAdminClientForm((current) => ({ ...current, plan: event.target.value as PlanCode }))}>
                         {Object.entries(planLabel).map(([value, label]) => (
                           <option key={value} value={value}>{label}</option>
                         ))}
                       </select>
                     </label>
                   </div>
+                  <div className="inline-grid">
+                    <label className="field">
+                      <span>Billing</span>
+                      <select value={adminClientForm.billingStatus} onChange={(event) => setAdminClientForm((current) => ({ ...current, billingStatus: event.target.value as BillingStatus }))}>
+                        {Object.entries(billingLabel).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Timezone</span>
+                      <input value={adminClientForm.timezone} onChange={(event) => setAdminClientForm((current) => ({ ...current, timezone: event.target.value }))} required />
+                    </label>
+                  </div>
                   <label className="field">
                     <span>Review link</span>
-                    <input value={newBusinessForm.googleReviewLink} onChange={(event) => setNewBusinessForm((current) => ({ ...current, googleReviewLink: event.target.value }))} />
+                    <input type="url" value={adminClientForm.googleReviewLink} onChange={(event) => setAdminClientForm((current) => ({ ...current, googleReviewLink: event.target.value }))} required />
                   </label>
-                  <button className="secondary" type="submit">Crear como trial</button>
+                  <div className="admin-access-card">
+                    <div>
+                      <p className="eyebrow">Acceso del cliente</p>
+                      <strong>Usuario business admin</strong>
+                    </div>
+                    <label className="field">
+                      <span>Nombre usuario</span>
+                      <input value={adminClientForm.ownerName} onChange={(event) => setAdminClientForm((current) => ({ ...current, ownerName: event.target.value }))} required />
+                    </label>
+                    <label className="field">
+                      <span>Email usuario</span>
+                      <input type="email" autoComplete="off" value={adminClientForm.ownerEmail} onChange={(event) => setAdminClientForm((current) => ({ ...current, ownerEmail: event.target.value }))} required />
+                    </label>
+                    <label className="field">
+                      <span>Contrasena inicial</span>
+                      <input type="password" autoComplete="new-password" minLength={10} value={adminClientForm.ownerPassword} onChange={(event) => setAdminClientForm((current) => ({ ...current, ownerPassword: event.target.value }))} required />
+                    </label>
+                  </div>
+                  <label className="field">
+                    <span>Notas internas</span>
+                    <textarea value={adminClientForm.notes} onChange={(event) => setAdminClientForm((current) => ({ ...current, notes: event.target.value }))} />
+                  </label>
+                  <button className="primary" type="submit">Crear cliente y activar usuario</button>
                 </form>
               </section>
             </aside>
