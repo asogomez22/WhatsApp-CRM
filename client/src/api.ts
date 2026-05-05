@@ -11,6 +11,7 @@ import {
 } from "./types";
 
 const TOKEN_STORAGE_KEY = "whatsapp-crm-auth-token";
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -63,12 +64,17 @@ class ApiClient {
       headers.set("Content-Type", "application/json");
     }
 
-    return parseJson<T>(
-      await fetch(path, {
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}${path}`, {
         ...init,
         headers
       })
-    );
+    } catch {
+      throw new Error("No se pudo conectar con la API. Revisa que el backend este desplegado y que VITE_API_BASE_URL apunte al dominio correcto si frontend y API van separados.");
+    }
+
+    return parseJson<T>(response);
   }
 
   getBootstrapState() {
