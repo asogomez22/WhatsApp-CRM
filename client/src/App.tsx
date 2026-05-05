@@ -15,14 +15,14 @@ import {
 } from "./types";
 
 const today = new Date().toISOString().slice(0, 10);
+const PLATFORM_ADMIN_EMAIL = "asogomez22@gmail.com";
 const weekdayLabel = ["Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"];
 const calendarHours = Array.from({ length: 12 }, (_, index) => index + 8);
 const viewTabs = [
-  { id: "overview", label: "Panel", icon: "space_dashboard" },
-  { id: "agenda", label: "Citas", icon: "calendar_month" },
-  { id: "clients", label: "Clientes", icon: "groups" },
-  { id: "setup", label: "Ajustes", icon: "settings" },
-  { id: "admin", label: "Admin", icon: "admin_panel_settings" }
+  { id: "overview", label: "Resumen" },
+  { id: "agenda", label: "Agenda" },
+  { id: "inbox", label: "WhatsApp" },
+  { id: "setup", label: "Ajustes" }
 ] as const;
 
 type ViewId = (typeof viewTabs)[number]["id"];
@@ -96,7 +96,8 @@ const defaultBusinessForm = {
   notes: "",
   plan: "full_pack" as PlanCode,
   googleReviewLink: "",
-  billingStatus: "unconfigured" as BillingStatus
+  billingStatus: "unconfigured" as BillingStatus,
+  active: true
 };
 
 const defaultChannelForm = {
@@ -286,6 +287,7 @@ function App() {
   const [availabilityDraft, setAvailabilityDraft] = useState<Array<{ weekday: number; start: string; end: string }>>([
     defaultAvailabilityRule
   ]);
+  const isPlatformOwner = session?.user.email.toLowerCase() === PLATFORM_ADMIN_EMAIL;
 
   const applySession = (nextSession: AuthSession) => {
     api.setToken(nextSession.token);
@@ -377,7 +379,7 @@ function App() {
   };
 
   const refreshDashboard = async (businessId = selectedBusinessId, selectedDate = date) => {
-    if (!businessId) {
+    if (!businessId || isPlatformOwner) {
       return;
     }
 
@@ -397,12 +399,12 @@ function App() {
   };
 
   useEffect(() => {
-    if (!selectedBusinessId || !session) {
+    if (!selectedBusinessId || !session || isPlatformOwner) {
       return;
     }
 
     void refreshDashboard(selectedBusinessId, date);
-  }, [date, selectedBusinessId, session]);
+  }, [date, isPlatformOwner, selectedBusinessId, session]);
 
   useEffect(() => {
     if (!dashboard) {
@@ -419,7 +421,8 @@ function App() {
       notes: dashboard.business.notes || "",
       plan: dashboard.business.plan,
       googleReviewLink: dashboard.business.googleReviewLink,
-      billingStatus: dashboard.business.billingStatus
+      billingStatus: dashboard.business.billingStatus,
+      active: dashboard.business.active
     });
 
     setChannelForm({
@@ -466,6 +469,66 @@ function App() {
   );
   const activeView = viewMeta[view];
 
+  const subscribedBusinesses = useMemo(
+    () => (session?.businesses ?? []).filter((business) => business.active && business.billingStatus !== "unconfigured"),
+    [session?.businesses]
+  );
+
+  const selectedAdminBusiness = useMemo(
+    () => subscribedBusinesses.find((business) => business.id === selectedBusinessId) ?? subscribedBusinesses[0] ?? null,
+    [selectedBusinessId, subscribedBusinesses]
+  );
+
+  const adminMetrics = useMemo(() => {
+    const activeSubscriptions = subscribedBusinesses.filter((business) => business.billingStatus === "active").length;
+    const pendingSubscriptions = subscribedBusinesses.filter((business) => business.billingStatus === "past_due").length;
+    const monthlyRevenue = subscribedBusinesses
+      .filter((business) => business.billingStatus === "active" || business.billingStatus === "trial")
+      .reduce((total, business) => total + business.planPriceMonthly, 0);
+
+    return {
+      activeSubscriptions,
+      monthlyRevenue,
+      pendingSubscriptions,
+      subscribedCount: subscribedBusinesses.length
+    };
+  }, [subscribedBusinesses]);
+
+  useEffect(() => {
+    if (!isPlatformOwner) {
+      return;
+    }
+
+    if (!subscribedBusinesses.length) {
+      setSelectedBusinessId("");
+      return;
+    }
+
+    if (!subscribedBusinesses.some((business) => business.id === selectedBusinessId)) {
+      setSelectedBusinessId(subscribedBusinesses[0].id);
+    }
+  }, [isPlatformOwner, selectedBusinessId, subscribedBusinesses]);
+
+  useEffect(() => {
+    if (!isPlatformOwner || !selectedAdminBusiness) {
+      return;
+    }
+
+    setBusinessForm({
+      name: selectedAdminBusiness.name,
+      email: selectedAdminBusiness.email,
+      phone: selectedAdminBusiness.phone,
+      city: selectedAdminBusiness.city,
+      address: selectedAdminBusiness.address || "",
+      timezone: selectedAdminBusiness.timezone,
+      notes: selectedAdminBusiness.notes || "",
+      plan: selectedAdminBusiness.plan,
+      googleReviewLink: selectedAdminBusiness.googleReviewLink,
+      billingStatus: selectedAdminBusiness.billingStatus,
+      active: selectedAdminBusiness.active
+    });
+  }, [isPlatformOwner, selectedAdminBusiness]);
+
   const contactsById = useMemo(
     () => new Map((dashboard?.contacts ?? []).map((contact) => [contact.id, contact])),
     [dashboard?.contacts]
@@ -501,6 +564,23 @@ function App() {
       )
       .slice(0, 8);
   }, [contactSearch, dashboard]);
+
+  const automationScore = dashboard
+    ? Math.round(
+        ([
+          dashboard.automation.reviewsReady,
+          dashboard.automation.remindersReady,
+          dashboard.automation.autoBookingReady,
+          dashboard.automation.handoffReady
+        ].filter(Boolean).length /
+          4) *
+          100
+      )
+    : 0;
+
+  const activeAppointments = dashboard
+    ? dashboard.appointments.filter((appointment) => ["pending", "scheduled", "confirmed"].includes(appointment.status)).length
+    : 0;
 
   const performAction = async (task: () => Promise<void>, successMessage?: string) => {
     setPageError(null);
@@ -638,6 +718,18 @@ function App() {
       await refreshBusinesses(dashboard.business.id);
       await refreshDashboard(dashboard.business.id, date);
     }, "Perfil del negocio actualizado");
+  };
+
+  const saveAdminBusinessSettings = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedAdminBusiness) {
+      return;
+    }
+
+    await performAction(async () => {
+      await api.updateBusiness(selectedAdminBusiness.id, businessForm);
+      await refreshBusinesses(selectedAdminBusiness.id);
+    }, "Negocio actualizado");
   };
 
   const saveChannelSettings = async (event: FormEvent) => {
@@ -800,7 +892,7 @@ function App() {
         timezone: "Europe/Madrid",
         notes: "",
         active: true,
-        billingStatus: "unconfigured"
+        billingStatus: isPlatformOwner ? "trial" : "unconfigured"
       });
       setNewBusinessForm({
         name: "",
@@ -812,8 +904,10 @@ function App() {
         googleReviewLink: "https://g.page/r/demo-review-link"
       });
       await refreshBusinesses(business.id);
-      await refreshDashboard(business.id, date);
-      setView("setup");
+      if (!isPlatformOwner) {
+        await refreshDashboard(business.id, date);
+        setView("setup");
+      }
     }, "Nuevo negocio creado");
   };
 
@@ -907,14 +1001,211 @@ function App() {
     );
   }
 
+  if (isPlatformOwner) {
+    return (
+      <div className="app-shell admin-shell">
+        <main className="admin-workspace">
+          <header className="hero-panel admin-hero">
+            <div className="hero-copy">
+              <p className="eyebrow">Consola admin</p>
+              <h1>Negocios suscritos</h1>
+              <p className="hero-description">
+                Vista limpia de plataforma para revisar suscripciones, planes y datos del negocio. No carga agenda,
+                citas ni conversaciones operativas.
+              </p>
+              <div className="hero-pill-row">
+                <span className="hero-pill">{adminMetrics.subscribedCount} negocios</span>
+                <span className="hero-pill accent">{moneyLabel(adminMetrics.monthlyRevenue)} / mes</span>
+                <span className="hero-pill">Admin: {session.user.email}</span>
+              </div>
+            </div>
+
+            <div className="admin-profile-panel">
+              <div className="profile-card">
+                <span className="eyebrow">Sesion</span>
+                <strong>{session.user.name}</strong>
+                <span className="muted">Administrador de plataforma</span>
+                <button className="secondary" type="button" onClick={logout}>
+                  Cerrar sesion
+                </button>
+              </div>
+            </div>
+          </header>
+
+          {pageError && <div className="error-banner">{pageError}</div>}
+          {notice && <div className="notice-banner">{notice}</div>}
+
+          <section className="metrics-grid admin-metrics">
+            <MetricCard label="Suscritos" value={String(adminMetrics.subscribedCount)} description="Activos con billing configurado" tone="teal" />
+            <MetricCard label="MRR" value={moneyLabel(adminMetrics.monthlyRevenue)} description="Planes activos o en trial" tone="ink" />
+            <MetricCard label="Activos" value={String(adminMetrics.activeSubscriptions)} description="Billing marcado como activo" tone="sage" />
+            <MetricCard label="Pendientes" value={String(adminMetrics.pendingSubscriptions)} description="Pagos past due para revisar" tone="rust" />
+          </section>
+
+          <section className="admin-layout">
+            <section className="panel">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Cartera</p>
+                  <h3>Negocios suscritos</h3>
+                </div>
+                <span className="muted">{subscribedBusinesses.length} visibles</span>
+              </div>
+
+              <div className="business-list">
+                {subscribedBusinesses.length ? (
+                  subscribedBusinesses.map((business) => (
+                    <button
+                      key={business.id}
+                      className={selectedAdminBusiness?.id === business.id ? "business-card active" : "business-card"}
+                      type="button"
+                      onClick={() => setSelectedBusinessId(business.id)}
+                    >
+                      <span className="business-card-main">
+                        <strong>{business.name}</strong>
+                        <span>{business.city} · {planLabel[business.plan]}</span>
+                      </span>
+                      <span className={`status-chip ${business.billingStatus}`}>{billingLabel[business.billingStatus]}</span>
+                      <span className="muted">{moneyLabel(business.planPriceMonthly)} / mes</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="empty-card">Todavia no hay negocios suscritos con billing configurado.</div>
+                )}
+              </div>
+            </section>
+
+            <aside className="stack-column">
+              <section className="panel">
+                <div className="section-head">
+                  <div>
+                    <p className="eyebrow">Administrar</p>
+                    <h3>{selectedAdminBusiness?.name || "Selecciona un negocio"}</h3>
+                  </div>
+                </div>
+
+                {selectedAdminBusiness ? (
+                  <form className="form-grid" onSubmit={saveAdminBusinessSettings}>
+                    <label className="field">
+                      <span>Nombre</span>
+                      <input value={businessForm.name} onChange={(event) => setBusinessForm((current) => ({ ...current, name: event.target.value }))} />
+                    </label>
+                    <div className="inline-grid">
+                      <label className="field">
+                        <span>Email</span>
+                        <input value={businessForm.email} onChange={(event) => setBusinessForm((current) => ({ ...current, email: event.target.value }))} />
+                      </label>
+                      <label className="field">
+                        <span>Telefono</span>
+                        <input value={businessForm.phone} onChange={(event) => setBusinessForm((current) => ({ ...current, phone: event.target.value }))} />
+                      </label>
+                    </div>
+                    <div className="inline-grid">
+                      <label className="field">
+                        <span>Ciudad</span>
+                        <input value={businessForm.city} onChange={(event) => setBusinessForm((current) => ({ ...current, city: event.target.value }))} />
+                      </label>
+                      <label className="field">
+                        <span>Direccion</span>
+                        <input value={businessForm.address} onChange={(event) => setBusinessForm((current) => ({ ...current, address: event.target.value }))} />
+                      </label>
+                    </div>
+                    <div className="inline-grid">
+                      <label className="field">
+                        <span>Plan</span>
+                        <select value={businessForm.plan} onChange={(event) => setBusinessForm((current) => ({ ...current, plan: event.target.value as PlanCode }))}>
+                          {Object.entries(planLabel).map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Billing</span>
+                        <select value={businessForm.billingStatus} onChange={(event) => setBusinessForm((current) => ({ ...current, billingStatus: event.target.value as BillingStatus }))}>
+                          {Object.entries(billingLabel).map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <label className="field">
+                      <span>Google review link</span>
+                      <input value={businessForm.googleReviewLink} onChange={(event) => setBusinessForm((current) => ({ ...current, googleReviewLink: event.target.value }))} />
+                    </label>
+                    <label className="field">
+                      <span>Notas internas</span>
+                      <textarea value={businessForm.notes} onChange={(event) => setBusinessForm((current) => ({ ...current, notes: event.target.value }))} />
+                    </label>
+                    <label className="toggle-item admin-toggle">
+                      <input type="checkbox" checked={businessForm.active} onChange={(event) => setBusinessForm((current) => ({ ...current, active: event.target.checked }))} />
+                      <span>Negocio activo</span>
+                    </label>
+                    <button className="primary" type="submit">Guardar cambios</button>
+                  </form>
+                ) : (
+                  <div className="empty-card">No hay ningun negocio suscrito para administrar.</div>
+                )}
+              </section>
+
+              <section className="panel compact-admin-panel">
+                <div className="section-head">
+                  <div>
+                    <p className="eyebrow">Alta manual</p>
+                    <h3>Nuevo suscriptor</h3>
+                  </div>
+                </div>
+
+                <form className="form-grid" onSubmit={createBusiness}>
+                  <label className="field">
+                    <span>Negocio</span>
+                    <input value={newBusinessForm.name} onChange={(event) => setNewBusinessForm((current) => ({ ...current, name: event.target.value }))} />
+                  </label>
+                  <div className="inline-grid">
+                    <label className="field">
+                      <span>Email</span>
+                      <input value={newBusinessForm.email} onChange={(event) => setNewBusinessForm((current) => ({ ...current, email: event.target.value }))} />
+                    </label>
+                    <label className="field">
+                      <span>Telefono</span>
+                      <input value={newBusinessForm.phone} onChange={(event) => setNewBusinessForm((current) => ({ ...current, phone: event.target.value }))} />
+                    </label>
+                  </div>
+                  <div className="inline-grid">
+                    <label className="field">
+                      <span>Ciudad</span>
+                      <input value={newBusinessForm.city} onChange={(event) => setNewBusinessForm((current) => ({ ...current, city: event.target.value }))} />
+                    </label>
+                    <label className="field">
+                      <span>Plan</span>
+                      <select value={newBusinessForm.plan} onChange={(event) => setNewBusinessForm((current) => ({ ...current, plan: event.target.value as PlanCode }))}>
+                        {Object.entries(planLabel).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <label className="field">
+                    <span>Review link</span>
+                    <input value={newBusinessForm.googleReviewLink} onChange={(event) => setNewBusinessForm((current) => ({ ...current, googleReviewLink: event.target.value }))} />
+                  </label>
+                  <button className="secondary" type="submit">Crear como trial</button>
+                </form>
+              </section>
+            </aside>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
-    <div className="crm-shell">
-      <aside className="app-sidebar">
-        <div className="sidebar-brand">
-          <div className="brand-mark">{selectedBusiness?.name?.slice(0, 1) || "T"}</div>
-          <div>
-            <h2>{selectedBusiness?.name || "TarracoWebs CRM"}</h2>
-            <p>Operaciones WhatsApp</p>
+    <div className="app-shell">
+      <div className="app-grid">
+        <aside className="side-rail">
+          <div className="brand-block">
+            <p className="eyebrow">TarracoWebs</p>
+            <h2>WhatsApp CRM</h2>
+            <span className="muted">Control diario de clientes, agenda y automatizaciones.</span>
           </div>
         </div>
 
@@ -981,67 +1272,266 @@ function App() {
           </div>
         </section>
 
-        {pageError && <div className="error-banner">{pageError}</div>}
-        {notice && <div className="notice-banner">{notice}</div>}
+        <main className="workspace">
+          <header className="hero-panel">
+            <div className="hero-copy">
+              <p className="eyebrow">Panel del negocio</p>
+              <h1>{selectedBusiness?.name || "Selecciona un negocio"}</h1>
+              <p className="hero-description">
+                Prioriza lo importante: citas de hoy, clientes por confirmar, estado del canal y pasos pendientes para
+                dejar WhatsApp vendiendo por ti.
+              </p>
+              <div className="hero-pill-row">
+                <span className="hero-pill">{selectedBusiness ? planLabel[selectedBusiness.plan] : "Sin plan"}</span>
+                <span className="hero-pill accent">
+                  {selectedBusiness ? moneyLabel(selectedBusiness.planPriceMonthly) : "--"}
+                </span>
+                <span className="hero-pill">
+                  {dashboard ? billingLabel[dashboard.billing.status] : "Cargando billing"}
+                </span>
+              </div>
+            </div>
 
-        {view === "admin" && session.user.role === "platform_admin" ? (
-          <AdminClientsView
-            clients={adminClients}
-            form={adminClientForm}
-            loading={loadingAdminClients}
-            planLabel={planLabel}
-            billingLabel={billingLabel}
-            onRefresh={() => void refreshAdminClients()}
-            onSubmit={createAdminClient}
-            onFormChange={setAdminClientForm}
-          />
-        ) : loadingDashboard || !dashboard ? (
-          <div className="state-card">Cargando datos del negocio...</div>
-        ) : (
-          <>
-            {view === "overview" && (
-              <>
-                <section className="metrics-grid">
-                  <MetricCard
-                    label="Citas hoy"
-                    value={String(dashboard.metrics.todayAppointments)}
-                    description="Actividad del dia seleccionado"
-                    icon="event"
-                  />
-                  <MetricCard
-                    label="Pendientes"
-                    value={String(pendingAppointments)}
-                    description="Necesitan primera revision"
-                    icon="pending_actions"
-                  />
-                  <MetricCard
-                    label="Sin confirmar"
-                    value={String(unconfirmedAppointments)}
-                    description="Programadas sin confirmacion"
-                    icon="schedule"
-                  />
-                  <MetricCard
-                    label="Confirmadas"
-                    value={String(confirmedAppointments)}
-                    description="Confirmadas o completadas"
-                    icon="verified"
-                  />
-                  <MetricCard
-                    label="Leads"
-                    value={String(dashboard.metrics.leadsTracked)}
-                    description="Contactos captados en CRM"
-                    icon="person_add"
-                  />
-                  <MetricCard
-                    label="Confirmacion"
-                    value={`${dashboard.metrics.confirmedRate}%`}
-                    description="Ratio operativo de asistencia"
-                    icon="monitoring"
-                  />
-                </section>
+            <div className="hero-side">
+              <div className="hero-status-grid">
+                <div className="progress-card">
+                  <span className="eyebrow">Onboarding</span>
+                  <strong>{dashboard?.onboarding.completionRatio ?? 0}%</strong>
+                  <span className="muted">
+                    {dashboard
+                      ? `${dashboard.onboarding.completed} de ${dashboard.onboarding.total} hitos operativos`
+                      : "Sin datos"}
+                  </span>
+                </div>
 
-                <section className="dashboard-grid overview-grid">
-                  <section className="surface-card dashboard-span-8 command-card">
+                <div className="hero-status-card">
+                  <span className="eyebrow">Automatizacion</span>
+                  <strong>{automationScore}%</strong>
+                  <span className="muted">Preparacion real del canal</span>
+                </div>
+              </div>
+
+              <div className="hero-actions">
+                <label className="field compact-field">
+                  <span>Fecha</span>
+                  <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+                </label>
+                <button className="secondary" type="button" onClick={() => void runAutomations()}>
+                  Procesar automatizaciones
+                </button>
+                <button className="ghost-button" type="button" onClick={() => void openBillingLink("checkout")}>
+                  Checkout Stripe
+                </button>
+                <button className="ghost-button" type="button" onClick={() => void openBillingLink("portal")}>
+                  Billing portal
+                </button>
+              </div>
+            </div>
+          </header>
+
+          {pageError && <div className="error-banner">{pageError}</div>}
+          {notice && <div className="notice-banner">{notice}</div>}
+
+          {loadingDashboard || !dashboard ? (
+            <div className="loading-stage">Cargando datos del negocio...</div>
+          ) : (
+            <>
+              {view === "overview" && (
+                <>
+                  <section className="metrics-grid">
+                    <MetricCard
+                      label="Citas hoy"
+                      value={String(dashboard.metrics.todayAppointments)}
+                      description={`${activeAppointments} siguen activas o pendientes`}
+                      tone="teal"
+                    />
+                    <MetricCard
+                      label="Pendientes"
+                      value={String(dashboard.metrics.pendingConfirmations)}
+                      description="Confirmaciones todavia abiertas"
+                      tone="rust"
+                    />
+                    <MetricCard
+                      label="Leads"
+                      value={String(dashboard.metrics.leadsTracked)}
+                      description="Contactos con interes detectado"
+                      tone="sage"
+                    />
+                    <MetricCard
+                      label="Confirmacion"
+                      value={`${dashboard.metrics.confirmedRate}%`}
+                      description="Ratio historico de citas confirmadas"
+                      tone="ink"
+                    />
+                  </section>
+
+                  <section className="action-strip">
+                    <div>
+                      <p className="eyebrow">Siguiente mejor accion</p>
+                      <strong>
+                        {dashboard.onboarding.completionRatio < 100
+                          ? "Termina el onboarding para activar todo el flujo"
+                          : dashboard.metrics.pendingConfirmations
+                            ? "Revisa las confirmaciones pendientes"
+                            : "El negocio esta listo para operar hoy"}
+                      </strong>
+                      <span className="muted">
+                        {dashboard.onboarding.completionRatio < 100
+                          ? "Completa canal, servicios y disponibilidad antes de escalar conversaciones."
+                          : dashboard.metrics.pendingConfirmations
+                            ? "Prioriza clientes que aun no han confirmado para reducir no-shows."
+                            : "Mantén automatizaciones procesadas y revisa los mensajes recientes."}
+                      </span>
+                    </div>
+                    <div className="action-strip-buttons">
+                      <button className="primary" type="button" onClick={() => setView("agenda")}>
+                        Ver agenda
+                      </button>
+                      <button className="secondary" type="button" onClick={() => setView("setup")}>
+                        Completar ajustes
+                      </button>
+                    </div>
+                  </section>
+
+                  <section className="workspace-grid">
+                    <section className="panel span-two">
+                      <div className="section-head">
+                        <div>
+                          <p className="eyebrow">Agenda inmediata</p>
+                          <h3>Proxima actividad</h3>
+                        </div>
+                        <span className="muted">{dashboard.appointments.length} citas en el dia</span>
+                      </div>
+
+                      <div className="next-callout">
+                        <div>
+                          <strong>{nextAppointment ? timeLabel(nextAppointment.startAt, dashboard.business.timezone) : "Sin huecos activos"}</strong>
+                          <p className="muted">
+                            {nextAppointment
+                              ? `${contactsById.get(nextAppointment.contactId)?.name || "Paciente"} · ${
+                                  servicesById.get(nextAppointment.serviceId)?.name || "Servicio"
+                                }`
+                              : "La agenda de hoy esta despejada"}
+                          </p>
+                        </div>
+                        <button className="secondary" type="button" onClick={() => setView("agenda")}>
+                          Ir a agenda
+                        </button>
+                      </div>
+
+                      <div className="stack-list">
+                        {dashboard.appointments.length ? (
+                          dashboard.appointments.slice(0, 5).map((appointment) => (
+                            <AppointmentRow
+                              key={appointment.id}
+                              appointment={appointment}
+                              contactName={contactsById.get(appointment.contactId)?.name || "Paciente"}
+                              serviceName={servicesById.get(appointment.serviceId)?.name || "Servicio"}
+                              timezone={dashboard.business.timezone}
+                              onStatusChange={updateStatus}
+                            />
+                          ))
+                        ) : (
+                          <div className="empty-card empty-state">
+                            <strong>Dia despejado</strong>
+                            <span>Crea una cita manual o deja que WhatsApp capture la siguiente oportunidad.</span>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="section-head">
+                        <div>
+                          <p className="eyebrow">Checklist</p>
+                          <h3>Onboarding operativo</h3>
+                        </div>
+                        <span className="muted">{dashboard.onboarding.completionRatio}% listo</span>
+                      </div>
+
+                      <div className="checklist-list">
+                        {dashboard.onboarding.items.map((item) => (
+                          <ChecklistRow key={item.id} item={item} />
+                        ))}
+                      </div>
+                    </section>
+                  </section>
+
+                  <section className="workspace-grid">
+                    <section className="panel">
+                      <div className="section-head">
+                        <div>
+                          <p className="eyebrow">Canal</p>
+                          <h3>Readiness del producto</h3>
+                        </div>
+                      </div>
+
+                      <div className="signal-grid">
+                        <SignalCard
+                          label="Resenas"
+                          status={dashboard.automation.reviewsReady}
+                          detail={dashboard.business.googleReviewLink ? "Link y canal listos" : "Falta enlace o canal"}
+                        />
+                        <SignalCard
+                          label="Anti no-show"
+                          status={dashboard.automation.remindersReady}
+                          detail={dashboard.availabilityRules.length ? "Disponibilidad cargada" : "Carga reglas de agenda"}
+                        />
+                        <SignalCard
+                          label="Citas auto"
+                          status={dashboard.automation.autoBookingReady}
+                          detail={dashboard.services.length ? "Servicios disponibles" : "Faltan servicios"}
+                        />
+                        <SignalCard
+                          label="Handoff"
+                          status={dashboard.automation.handoffReady}
+                          detail={dashboard.users.length ? "Equipo asignado" : "Sin usuarios del negocio"}
+                        />
+                      </div>
+
+                      <div className="info-band">
+                        <span>WhatsApp: {dashboard.channel?.phoneE164 || "Pendiente"}</span>
+                        <span>Plantillas: {dashboard.channel?.templatesReady ? "Listas" : "Pendientes"}</span>
+                        <span>Meta verificado: {dashboard.channel?.metaVerified ? "Si" : "No"}</span>
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="section-head">
+                        <div>
+                          <p className="eyebrow">Mensajes</p>
+                          <h3>Actividad reciente</h3>
+                        </div>
+                        <button className="ghost-button" type="button" onClick={() => setView("inbox")}>
+                          Abrir inbox
+                        </button>
+                      </div>
+
+                      <div className="message-stack">
+                        {dashboard.recentMessages.length ? (
+                          dashboard.recentMessages.slice(0, 6).map((message) => (
+                            <MessageRow
+                              key={message.id}
+                              message={message}
+                              contactName={contactsById.get(message.contactId)?.name || "Paciente"}
+                              timezone={dashboard.business.timezone}
+                            />
+                          ))
+                        ) : (
+                          <div className="empty-card empty-state">
+                            <strong>Sin mensajes recientes</strong>
+                            <span>Cuando entren conversaciones o recordatorios apareceran aqui.</span>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  </section>
+                </>
+              )}
+
+              {view === "agenda" && (
+                <section className="workspace-grid">
+                  <section className="panel span-two">
                     <div className="section-head">
                       <div>
                         <p className="eyebrow">Operacion</p>
@@ -1152,16 +1642,19 @@ function App() {
                     </div>
                     <div className="message-stack">
                       {dashboard.recentMessages.length ? (
-                        dashboard.recentMessages.slice(0, 5).map((message) => (
+                        dashboard.recentMessages.map((message) => (
                           <MessageRow
                             key={message.id}
                             message={message}
-                            contactName={contactsById.get(message.contactId)?.name || "Cliente"}
+                            contactName={contactsById.get(message.contactId)?.name || "Paciente"}
                             timezone={dashboard.business.timezone}
                           />
                         ))
                       ) : (
-                        <EmptyState icon="forum" title="Sin mensajes" detail="Las conversaciones recientes apareceran aqui." />
+                        <div className="empty-card empty-state">
+                          <strong>No hay conversacion todavia</strong>
+                          <span>Usa la simulacion para probar el flujo antes de conectarlo a trafico real.</span>
+                        </div>
                       )}
                     </div>
                   </section>
