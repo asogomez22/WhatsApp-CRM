@@ -16,7 +16,19 @@ const toBase64Url = (value: string | Buffer) => Buffer.from(value).toString("bas
 
 const fromBase64Url = (value: string) => Buffer.from(value, "base64url").toString("utf8");
 
-const getJwtSecret = () => process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+const getJwtSecret = () => {
+  const secret = process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
+
+  if (process.env.NODE_ENV === "production" && secret === DEFAULT_JWT_SECRET) {
+    throw new Error("JWT_SECRET must be configured in production");
+  }
+
+  if (process.env.JWT_SECRET && secret.length < 32) {
+    throw new Error("JWT_SECRET must be at least 32 characters");
+  }
+
+  return secret;
+};
 
 export const hashPasswordSync = (password: string) => {
   const salt = randomBytes(16).toString("hex");
@@ -42,7 +54,7 @@ export const verifyPassword = (password: string, storedHash: string) => {
 
 export const signToken = (
   user: Pick<AppUser, "id" | "email" | "role" | "businessIds">,
-  expiresInSeconds = 60 * 60 * 24 * 7
+  expiresInSeconds = Number(process.env.JWT_EXPIRES_SECONDS ?? 60 * 60 * 8)
 ) => {
   const now = Math.floor(Date.now() / 1000);
   const header = {
@@ -69,6 +81,11 @@ export const verifyToken = (token: string) => {
     throw new Error("Malformed token");
   }
 
+  const header = JSON.parse(fromBase64Url(headerEncoded)) as { alg?: string; typ?: string };
+  if (header.alg !== "HS256" || header.typ !== "JWT") {
+    throw new Error("Unsupported token header");
+  }
+
   const unsigned = `${headerEncoded}.${payloadEncoded}`;
   const expectedSignature = createHmac("sha256", getJwtSecret()).update(unsigned).digest();
   const receivedSignature = Buffer.from(signature, "base64url");
@@ -78,6 +95,17 @@ export const verifyToken = (token: string) => {
   }
 
   const payload = JSON.parse(fromBase64Url(payloadEncoded)) as AuthTokenPayload;
+  if (
+    typeof payload.sub !== "string" ||
+    typeof payload.email !== "string" ||
+    !["platform_admin", "business_admin", "staff"].includes(payload.role) ||
+    !Array.isArray(payload.businessIds) ||
+    typeof payload.iat !== "number" ||
+    typeof payload.exp !== "number"
+  ) {
+    throw new Error("Invalid token payload");
+  }
+
   if (payload.exp * 1000 <= Date.now()) {
     throw new Error("Token expired");
   }

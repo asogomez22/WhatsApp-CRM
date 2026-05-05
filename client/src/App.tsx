@@ -1,12 +1,13 @@
-import { FormEvent, startTransition, useEffect, useMemo, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, startTransition, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import {
+  AdminClientSummary,
   Appointment,
   AppointmentStatus,
   AuthSession,
   BillingStatus,
-  BootstrapState,
   Business,
+  Contact,
   DashboardSummary,
   MessageLog,
   PlanCode,
@@ -16,6 +17,7 @@ import {
 const today = new Date().toISOString().slice(0, 10);
 const PLATFORM_ADMIN_EMAIL = "asogomez22@gmail.com";
 const weekdayLabel = ["Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab"];
+const calendarHours = Array.from({ length: 12 }, (_, index) => index + 8);
 const viewTabs = [
   { id: "overview", label: "Resumen" },
   { id: "agenda", label: "Agenda" },
@@ -24,6 +26,42 @@ const viewTabs = [
 ] as const;
 
 type ViewId = (typeof viewTabs)[number]["id"];
+type CalendarMode = "day" | "week" | "month";
+
+const viewMeta: Record<
+  ViewId,
+  {
+    eyebrow: string;
+    title: string;
+    description: string;
+  }
+> = {
+  overview: {
+    eyebrow: "Dashboard operativo",
+    title: "Centro de control",
+    description: "Agenda, clientes, automatizaciones y facturacion organizadas para decidir rapido sin perder contexto."
+  },
+  agenda: {
+    eyebrow: "Calendario",
+    title: "Agenda",
+    description: "Planificacion diaria, semanal y mensual con estados visibles y alta de citas desde un flujo enfocado."
+  },
+  clients: {
+    eyebrow: "CRM",
+    title: "Clientes",
+    description: "Directorio comercial editable, preparado para seguimiento por telefono, email y etiquetas."
+  },
+  setup: {
+    eyebrow: "Ajustes",
+    title: "Configuracion",
+    description: "Perfil del negocio, canal de WhatsApp, servicios, disponibilidad y reglas de automatizacion."
+  },
+  admin: {
+    eyebrow: "Platform admin",
+    title: "Clientes y planes",
+    description: "Alta de clientes, credenciales, plan contratado y estado de facturacion desde una sola vista."
+  }
+};
 
 const planLabel: Record<PlanCode, string> = {
   reviews: "Plan 1 · Resenas",
@@ -46,18 +84,6 @@ const billingLabel: Record<BillingStatus, string> = {
   trial: "Trial",
   active: "Activo",
   past_due: "Pendiente"
-};
-
-const defaultRegisterForm = {
-  name: "",
-  email: "",
-  password: "",
-  businessName: "",
-  phone: "",
-  city: "",
-  address: "",
-  plan: "full_pack" as PlanCode,
-  googleReviewLink: ""
 };
 
 const defaultBusinessForm = {
@@ -93,6 +119,63 @@ const defaultAvailabilityRule = {
   end: "14:00"
 };
 
+const defaultLoginForm = {
+  email: "",
+  password: ""
+};
+
+const defaultAdminClientForm = {
+  businessName: "",
+  businessEmail: "",
+  phone: "",
+  city: "",
+  address: "",
+  timezone: "Europe/Madrid",
+  notes: "",
+  plan: "full_pack" as PlanCode,
+  googleReviewLink: "https://g.page/r/demo-review-link",
+  billingStatus: "trial" as BillingStatus,
+  ownerName: "",
+  ownerEmail: "",
+  ownerPassword: ""
+};
+
+const addDays = (isoDate: string, days: number) => {
+  const value = new Date(`${isoDate}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+};
+
+const getWeekDates = (isoDate: string) => {
+  const selected = new Date(`${isoDate}T00:00:00.000Z`);
+  const mondayOffset = (selected.getUTCDay() + 6) % 7;
+  const monday = new Date(selected);
+  monday.setUTCDate(selected.getUTCDate() - mondayOffset);
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setUTCDate(monday.getUTCDate() + index);
+    return date.toISOString().slice(0, 10);
+  });
+};
+
+const getMonthDates = (isoDate: string) => {
+  const selected = new Date(`${isoDate}T00:00:00.000Z`);
+  const first = new Date(Date.UTC(selected.getUTCFullYear(), selected.getUTCMonth(), 1));
+  const startOffset = (first.getUTCDay() + 6) % 7;
+  const gridStart = new Date(first);
+  gridStart.setUTCDate(first.getUTCDate() - startOffset);
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setUTCDate(gridStart.getUTCDate() + index);
+    return {
+      iso: date.toISOString().slice(0, 10),
+      inMonth: date.getUTCMonth() === selected.getUTCMonth()
+    };
+  });
+};
+
 const moneyLabel = (amount: number) =>
   new Intl.NumberFormat("es-ES", {
     style: "currency",
@@ -113,6 +196,36 @@ const dateTimeLabel = (iso: string, timezone = "Europe/Madrid") =>
     timeZone: timezone
   }).format(new Date(iso));
 
+const dateLabel = (isoDate: string) =>
+  new Intl.DateTimeFormat("es-ES", {
+    weekday: "long",
+    day: "numeric",
+    month: "long"
+  }).format(new Date(`${isoDate}T00:00:00.000Z`));
+
+const shortDateLabel = (isoDate: string) =>
+  new Intl.DateTimeFormat("es-ES", {
+    day: "numeric",
+    month: "short"
+  }).format(new Date(`${isoDate}T00:00:00.000Z`));
+
+const getCalendarPosition = (appointment: Appointment) => {
+  const start = new Date(appointment.startAt);
+  const end = new Date(appointment.endAt);
+  const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes();
+  const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes();
+  const calendarStart = 8 * 60;
+  const calendarEnd = 20 * 60;
+  const totalMinutes = calendarEnd - calendarStart;
+  const top = Math.max(0, ((startMinutes - calendarStart) / totalMinutes) * 100);
+  const height = Math.max(7, ((Math.min(endMinutes, calendarEnd) - Math.max(startMinutes, calendarStart)) / totalMinutes) * 100);
+
+  return {
+    top: `${top}%`,
+    height: `${height}%`
+  };
+};
+
 const normalizeTags = (value: string) =>
   value
     .split(",")
@@ -120,22 +233,24 @@ const normalizeTags = (value: string) =>
     .filter(Boolean);
 
 function App() {
-  const [bootstrap, setBootstrap] = useState<BootstrapState | null>(null);
   const [session, setSession] = useState<{ user: SessionUser; businesses: Business[] } | null>(null);
   const [appLoading, setAppLoading] = useState(true);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
+  const [loadingAdminClients, setLoadingAdminClients] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [loginForm, setLoginForm] = useState(defaultLoginForm);
+  const [loginLoading, setLoginLoading] = useState(false);
   const [selectedBusinessId, setSelectedBusinessId] = useState("");
   const [view, setView] = useState<ViewId>("overview");
+  const [calendarMode, setCalendarMode] = useState<CalendarMode>("week");
   const [date, setDate] = useState(today);
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
-  const [loginForm, setLoginForm] = useState({
-    email: "",
-    password: ""
-  });
-  const [registerForm, setRegisterForm] = useState(defaultRegisterForm);
+  const [adminClients, setAdminClients] = useState<AdminClientSummary[]>([]);
+  const [appointmentModalOpen, setAppointmentModalOpen] = useState(false);
+  const [contactModalOpen, setContactModalOpen] = useState(false);
+  const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [contactSearch, setContactSearch] = useState("");
   const [businessForm, setBusinessForm] = useState(defaultBusinessForm);
   const [channelForm, setChannelForm] = useState(defaultChannelForm);
   const [newBusinessForm, setNewBusinessForm] = useState({
@@ -147,6 +262,7 @@ function App() {
     plan: "reviews" as PlanCode,
     googleReviewLink: "https://g.page/r/demo-review-link"
   });
+  const [adminClientForm, setAdminClientForm] = useState(defaultAdminClientForm);
   const [contactForm, setContactForm] = useState({
     name: "",
     phone: "",
@@ -173,32 +289,53 @@ function App() {
   ]);
   const isPlatformOwner = session?.user.email.toLowerCase() === PLATFORM_ADMIN_EMAIL;
 
+  const applySession = (nextSession: AuthSession) => {
+    api.setToken(nextSession.token);
+    setSession({
+      user: nextSession.user,
+      businesses: nextSession.businesses
+    });
+    setSelectedBusinessId(nextSession.businesses[0]?.id || "");
+    if (!nextSession.businesses.length && nextSession.user.role === "platform_admin") {
+      setView("admin");
+    }
+    setDashboard(null);
+    setPageError(null);
+    setNotice(null);
+  };
+
   useEffect(() => {
     let cancelled = false;
 
     const loadApp = async () => {
       setAppLoading(true);
       try {
-        const bootstrapState = await api.getBootstrapState();
-        if (!cancelled) {
-          setBootstrap(bootstrapState);
-        }
+        if (api.getToken()) {
+          try {
+            const currentSession = await api.getSession();
+            if (cancelled) {
+              return;
+            }
 
-        if (!api.getToken()) {
-          return;
+            applySession({
+              token: api.getToken(),
+              user: currentSession.user,
+              businesses: currentSession.businesses
+            });
+          } catch {
+            api.setToken("");
+            if (!cancelled) {
+              setSession(null);
+            }
+          }
+        } else {
+          setSession(null);
         }
-
-        const currentSession = await api.getSession();
-        if (cancelled) {
-          return;
-        }
-
-        setSession(currentSession);
-        setSelectedBusinessId((current) => current || currentSession.businesses[0]?.id || "");
       } catch (error) {
         api.setToken("");
         if (!cancelled) {
-          setPageError(error instanceof Error ? error.message : "No se pudo iniciar la aplicacion");
+          setSession(null);
+          setPageError(error instanceof Error ? error.message : "No se pudo abrir el dashboard");
         }
       } finally {
         if (!cancelled) {
@@ -326,6 +463,11 @@ function App() {
     () => session?.businesses.find((business) => business.id === selectedBusinessId) ?? null,
     [selectedBusinessId, session?.businesses]
   );
+  const visibleTabs = useMemo(
+    () => viewTabs.filter((tab) => tab.id !== "admin" || session?.user.role === "platform_admin"),
+    [session?.user.role]
+  );
+  const activeView = viewMeta[view];
 
   const subscribedBusinesses = useMemo(
     () => (session?.businesses ?? []).filter((business) => business.active && business.billingStatus !== "unconfigured"),
@@ -400,6 +542,28 @@ function App() {
   const nextAppointment = dashboard?.appointments.find((appointment) =>
     ["pending", "scheduled", "confirmed"].includes(appointment.status)
   );
+  const selectedWeek = useMemo(() => getWeekDates(date), [date]);
+  const selectedMonth = useMemo(() => getMonthDates(date), [date]);
+  const pendingAppointments = dashboard?.appointments.filter((appointment) => appointment.status === "pending").length ?? 0;
+  const unconfirmedAppointments =
+    dashboard?.appointments.filter((appointment) => appointment.status === "scheduled").length ?? 0;
+  const confirmedAppointments =
+    dashboard?.appointments.filter((appointment) => appointment.status === "confirmed" || appointment.status === "completed").length ?? 0;
+  const filteredContacts = useMemo(() => {
+    const query = contactSearch.trim().toLowerCase();
+    if (!dashboard || !query) {
+      return dashboard?.contacts.slice(0, 6) ?? [];
+    }
+
+    return dashboard.contacts
+      .filter(
+        (contact) =>
+          contact.name.toLowerCase().includes(query) ||
+          contact.phone.toLowerCase().includes(query) ||
+          (contact.email ?? "").toLowerCase().includes(query)
+      )
+      .slice(0, 8);
+  }, [contactSearch, dashboard]);
 
   const automationScore = dashboard
     ? Math.round(
@@ -432,47 +596,49 @@ function App() {
     }
   };
 
-  const applySession = (nextSession: AuthSession) => {
-    api.setToken(nextSession.token);
-    setSession({
-      user: nextSession.user,
-      businesses: nextSession.businesses
-    });
-    setSelectedBusinessId(nextSession.businesses[0]?.id || "");
-    setDashboard(null);
-    setPageError(null);
-    setNotice(null);
+  const refreshAdminClients = async () => {
+    if (session?.user.role !== "platform_admin") {
+      return;
+    }
+
+    setLoadingAdminClients(true);
+    try {
+      setAdminClients(await api.getAdminClients());
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "No se pudieron cargar los clientes");
+    } finally {
+      setLoadingAdminClients(false);
+    }
   };
+
+  useEffect(() => {
+    if (session?.user.role === "platform_admin") {
+      void refreshAdminClients();
+    }
+  }, [session?.user.role]);
 
   const submitLogin = async (event: FormEvent) => {
     event.preventDefault();
+    setLoginLoading(true);
+    setPageError(null);
 
-    await performAction(async () => {
-      const authSession = await api.login(loginForm);
-      applySession(authSession);
-    });
-  };
-
-  const submitRegister = async (event: FormEvent) => {
-    event.preventDefault();
-
-    await performAction(async () => {
-      const authSession = await api.register({
-        ...registerForm,
-        address: registerForm.address || undefined,
-        googleReviewLink: registerForm.googleReviewLink || undefined
-      });
-      applySession(authSession);
-    });
+    try {
+      const nextSession = await api.login(loginForm);
+      applySession(nextSession);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : "No se pudo iniciar sesion");
+    } finally {
+      setLoginLoading(false);
+    }
   };
 
   const logout = () => {
     api.setToken("");
     setSession(null);
     setDashboard(null);
+    setAdminClients([]);
     setSelectedBusinessId("");
-    setPageError(null);
-    setNotice(null);
+    setView("overview");
   };
 
   const submitAppointment = async (event: FormEvent) => {
@@ -501,6 +667,8 @@ function App() {
         notes: appointmentForm.notes || undefined
       });
       setAppointmentForm((current) => ({ ...current, startAtLocal: "", notes: "" }));
+      setAppointmentModalOpen(false);
+      setContactSearch("");
       await refreshDashboard(dashboard.business.id, date);
     }, "Cita creada");
   };
@@ -628,8 +796,70 @@ function App() {
         notes: "",
         tags: "lead, nuevo"
       });
+      setContactModalOpen(false);
+      setEditingContactId(null);
       await refreshDashboard(dashboard.business.id, date);
     }, "Contacto creado");
+  };
+
+  const openNewContactModal = () => {
+    setEditingContactId(null);
+    setContactForm({
+      name: "",
+      phone: "",
+      email: "",
+      notes: "",
+      tags: "lead, nuevo"
+    });
+    setContactModalOpen(true);
+  };
+
+  const openEditContactModal = (contact: Contact) => {
+    setEditingContactId(contact.id);
+    setContactForm({
+      name: contact.name,
+      phone: contact.phone,
+      email: contact.email || "",
+      notes: contact.notes || "",
+      tags: contact.tags.join(", ")
+    });
+    setContactModalOpen(true);
+  };
+
+  const saveContact = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!dashboard) {
+      return;
+    }
+
+    if (!editingContactId) {
+      await addContact(event);
+      return;
+    }
+
+    await performAction(async () => {
+      await api.updateContact(dashboard.business.id, editingContactId, {
+        name: contactForm.name,
+        phone: contactForm.phone,
+        email: contactForm.email || undefined,
+        notes: contactForm.notes || undefined,
+        tags: normalizeTags(contactForm.tags)
+      });
+      setContactModalOpen(false);
+      setEditingContactId(null);
+      await refreshDashboard(dashboard.business.id, date);
+    }, "Cliente actualizado");
+  };
+
+  const deleteContact = async (contactId: string) => {
+    if (!dashboard || !window.confirm("Eliminar este cliente?")) {
+      return;
+    }
+
+    await performAction(async () => {
+      await api.deleteContact(dashboard.business.id, contactId);
+      await refreshDashboard(dashboard.business.id, date);
+    }, "Cliente eliminado");
   };
 
   const saveAvailability = async (event: FormEvent) => {
@@ -681,6 +911,22 @@ function App() {
     }, "Nuevo negocio creado");
   };
 
+  const createAdminClient = async (event: FormEvent) => {
+    event.preventDefault();
+
+    await performAction(async () => {
+      const client = await api.createAdminClient({
+        ...adminClientForm,
+        address: adminClientForm.address || undefined,
+        notes: adminClientForm.notes || undefined
+      });
+      setAdminClientForm(defaultAdminClientForm);
+      await refreshBusinesses(client.business.id);
+      await refreshAdminClients();
+      setView("setup");
+    }, "Cliente creado con usuario y plan asignado");
+  };
+
   const openBillingLink = async (mode: "checkout" | "portal") => {
     if (!dashboard) {
       return;
@@ -698,176 +944,58 @@ function App() {
 
   if (appLoading) {
     return (
-      <div className="auth-shell">
-        <div className="loading-stage">Preparando CRM, agenda y automatizaciones...</div>
+      <div className="state-shell">
+        <div className="state-card">Preparando CRM, agenda y automatizaciones...</div>
       </div>
     );
   }
 
   if (!session) {
     return (
-      <div className="auth-shell">
-        <section className="auth-stage">
-          <div className="auth-copy">
+      <div className="login-shell">
+        <section className="login-panel">
+          <div className="login-copy">
             <p className="eyebrow">TarracoWebs · WhatsApp CRM</p>
-            <h1>Un dashboard mas serio para agenda, onboarding y captacion por WhatsApp.</h1>
+            <h1>Agenda, WhatsApp y clientes en un unico panel.</h1>
             <p className="muted">
-              Esta version ya incluye auth con JWT, aislamiento real por negocio, onboarding visible, billing preparado y
-              un panel pensado para operar el dia a dia sin perder contexto.
+              Accede al centro operativo para gestionar citas, automatizaciones anti no-show y solicitudes de resena.
             </p>
-            {bootstrap && (
-              <div className="demo-card">
-                <strong>Demo lista</strong>
-                <span>
-                  Usuario: {bootstrap.demoUser} · Password: {bootstrap.demoPassword}
-                </span>
-                <button
-                  className="ghost-button"
-                  type="button"
-                  onClick={() =>
-                    setLoginForm({
-                      email: bootstrap.demoUser,
-                      password: bootstrap.demoPassword
-                    })
-                  }
-                >
-                  Rellenar credenciales demo
-                </button>
-              </div>
-            )}
-          </div>
-
-          <div className="auth-panel">
-            <div className="auth-switch">
-              <button
-                className={authMode === "login" ? "primary" : "secondary"}
-                type="button"
-                onClick={() => setAuthMode("login")}
-              >
-                Entrar
-              </button>
-              <button
-                className={authMode === "register" ? "primary" : "secondary"}
-                type="button"
-                onClick={() => setAuthMode("register")}
-              >
-                Alta inicial
-              </button>
+            <div className="login-proof-grid" aria-label="Capacidades principales">
+              <span>Agenda en tiempo real</span>
+              <span>Flujos WhatsApp</span>
+              <span>Facturacion SaaS</span>
             </div>
-
-            {pageError && <div className="error-banner">{pageError}</div>}
-
-            {authMode === "login" ? (
-              <form className="auth-form" onSubmit={submitLogin}>
-                <label className="field">
-                  <span>Email</span>
-                  <input
-                    type="email"
-                    value={loginForm.email}
-                    onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Password</span>
-                  <input
-                    type="password"
-                    value={loginForm.password}
-                    onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
-                  />
-                </label>
-                <button className="primary" type="submit">
-                  Entrar al panel
-                </button>
-              </form>
-            ) : (
-              <form className="auth-form" onSubmit={submitRegister}>
-                <label className="field">
-                  <span>Tu nombre</span>
-                  <input
-                    value={registerForm.name}
-                    onChange={(event) => setRegisterForm((current) => ({ ...current, name: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Email</span>
-                  <input
-                    type="email"
-                    value={registerForm.email}
-                    onChange={(event) => setRegisterForm((current) => ({ ...current, email: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Password</span>
-                  <input
-                    type="password"
-                    value={registerForm.password}
-                    onChange={(event) => setRegisterForm((current) => ({ ...current, password: event.target.value }))}
-                  />
-                </label>
-                <label className="field">
-                  <span>Negocio</span>
-                  <input
-                    value={registerForm.businessName}
-                    onChange={(event) =>
-                      setRegisterForm((current) => ({ ...current, businessName: event.target.value }))
-                    }
-                  />
-                </label>
-                <div className="inline-grid">
-                  <label className="field">
-                    <span>Telefono</span>
-                    <input
-                      value={registerForm.phone}
-                      onChange={(event) => setRegisterForm((current) => ({ ...current, phone: event.target.value }))}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Ciudad</span>
-                    <input
-                      value={registerForm.city}
-                      onChange={(event) => setRegisterForm((current) => ({ ...current, city: event.target.value }))}
-                    />
-                  </label>
-                </div>
-                <label className="field">
-                  <span>Direccion</span>
-                  <input
-                    value={registerForm.address}
-                    onChange={(event) => setRegisterForm((current) => ({ ...current, address: event.target.value }))}
-                  />
-                </label>
-                <div className="inline-grid">
-                  <label className="field">
-                    <span>Plan</span>
-                    <select
-                      value={registerForm.plan}
-                      onChange={(event) =>
-                        setRegisterForm((current) => ({ ...current, plan: event.target.value as PlanCode }))
-                      }
-                    >
-                      {Object.entries(planLabel).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Google review link</span>
-                    <input
-                      value={registerForm.googleReviewLink}
-                      onChange={(event) =>
-                        setRegisterForm((current) => ({ ...current, googleReviewLink: event.target.value }))
-                      }
-                    />
-                  </label>
-                </div>
-                <button className="primary" type="submit">
-                  Crear negocio y acceder
-                </button>
-              </form>
-            )}
           </div>
+
+          <form className="login-form" onSubmit={submitLogin}>
+            <div>
+              <p className="eyebrow">Acceso privado</p>
+              <h2>Iniciar sesion</h2>
+            </div>
+            {pageError && <div className="error-banner">{pageError}</div>}
+            <label className="field">
+              <span>Email</span>
+              <input
+                type="email"
+                autoComplete="email"
+                value={loginForm.email}
+                onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>Password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={loginForm.password}
+                onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
+              />
+            </label>
+            <button className="primary" type="submit" disabled={loginLoading}>
+              {loginLoading ? "Entrando..." : "Entrar"}
+            </button>
+            <p className="form-footnote">Usa las credenciales asignadas a tu negocio o usuario administrador.</p>
+          </form>
         </section>
       </div>
     );
@@ -1079,10 +1207,46 @@ function App() {
             <h2>WhatsApp CRM</h2>
             <span className="muted">Control diario de clientes, agenda y automatizaciones.</span>
           </div>
+        </div>
 
-          <label className="field compact-field">
-            <span>Negocio activo</span>
-            <select value={selectedBusinessId} onChange={(event) => setSelectedBusinessId(event.target.value)}>
+        <nav className="sidebar-nav">
+          {visibleTabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={view === tab.id ? "sidebar-link active" : "sidebar-link"}
+              type="button"
+              onClick={() => setView(tab.id)}
+            >
+              <span className="material-symbols-outlined">{tab.icon}</span>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="sidebar-note-card">
+            <span className="eyebrow">Sesion</span>
+            <strong>{session.user.name}</strong>
+            <span className="muted">{session.user.email}</span>
+            <span className="role-pill">{session.user.role.replace("_", " ")}</span>
+          </div>
+          <button className="ghost-button sidebar-logout" type="button" onClick={logout}>
+            Cerrar sesion
+          </button>
+        </div>
+      </aside>
+
+      <header className="app-topbar">
+        <div className="topbar-title">TarracoWebs CRM</div>
+        <div className="topbar-actions">
+          <label className="field topbar-field">
+            <span>Negocio</span>
+            <select
+              value={selectedBusinessId}
+              onChange={(event) => setSelectedBusinessId(event.target.value)}
+              disabled={!session.businesses.length}
+            >
+              {!session.businesses.length && <option value="">Sin negocios</option>}
               {session.businesses.map((business) => (
                 <option key={business.id} value={business.id}>
                   {business.name}
@@ -1090,38 +1254,23 @@ function App() {
               ))}
             </select>
           </label>
+          <div className="avatar-chip">{session.user.name.slice(0, 1)}</div>
+        </div>
+      </header>
 
-          <nav className="rail-nav">
-            {viewTabs.map((tab) => (
-              <button
-                key={tab.id}
-                className={view === tab.id ? "rail-button active" : "rail-button"}
-                type="button"
-                onClick={() => setView(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-
-          <div className="profile-card">
-            <span className="eyebrow">Sesion</span>
-            <strong>{session.user.name}</strong>
-            <span className="muted">
-              {session.user.role} · {session.user.email}
-            </span>
-            <button className="secondary" type="button" onClick={logout}>
-              Cerrar sesion
-            </button>
+      <main className="app-main">
+        <section className="page-header">
+          <div>
+            <p className="eyebrow">{activeView.eyebrow}</p>
+            <h1>{activeView.title}</h1>
+            <p className="page-description">{activeView.description}</p>
           </div>
-
-          <div className="rail-note">
-            <strong>Checklist visible</strong>
-            <span>
-              {dashboard ? `${dashboard.onboarding.completed}/${dashboard.onboarding.total} pasos cerrados` : "Cargando"}
-            </span>
+          <div className="page-meta">
+            <span>{selectedBusiness ? planLabel[selectedBusiness.plan] : "Sin plan"}</span>
+            <span>{selectedBusiness ? moneyLabel(selectedBusiness.planPriceMonthly) : "--"}</span>
+            <span>{dashboard ? billingLabel[dashboard.billing.status] : "Cargando"}</span>
           </div>
-        </aside>
+        </section>
 
         <main className="workspace">
           <header className="hero-panel">
@@ -1385,172 +1534,93 @@ function App() {
                   <section className="panel span-two">
                     <div className="section-head">
                       <div>
-                        <p className="eyebrow">Agenda del dia</p>
-                        <h3>Citas y estados</h3>
+                        <p className="eyebrow">Operacion</p>
+                        <h3>Prioridad inmediata</h3>
                       </div>
-                      <span className="muted">
-                        {dashboard.metrics.completedAppointments} completadas · {dashboard.metrics.noShows} no-show
+                      <span className={`status-badge ${nextAppointment?.status || "scheduled"}`}>
+                        {nextAppointment ? statusLabel[nextAppointment.status] : "Sin urgencias"}
                       </span>
                     </div>
 
-                    <div className="stack-list">
-                      {dashboard.appointments.length ? (
-                        dashboard.appointments.map((appointment) => (
-                          <AppointmentRow
-                            key={appointment.id}
-                            appointment={appointment}
-                            contactName={contactsById.get(appointment.contactId)?.name || "Paciente"}
-                            serviceName={servicesById.get(appointment.serviceId)?.name || "Servicio"}
-                            timezone={dashboard.business.timezone}
-                            onStatusChange={updateStatus}
-                          />
-                        ))
-                      ) : (
-                        <div className="empty-card">No hay citas para esta fecha.</div>
-                      )}
+                    <div className="highlight-callout">
+                      <div>
+                        <span className="eyebrow">Siguiente cita</span>
+                        <strong>
+                          {nextAppointment
+                            ? contactsById.get(nextAppointment.contactId)?.name || "Cliente"
+                            : "Agenda despejada"}
+                        </strong>
+                        <p>
+                          {nextAppointment
+                            ? `${dateTimeLabel(nextAppointment.startAt, dashboard.business.timezone)} · ${
+                                servicesById.get(nextAppointment.serviceId)?.name || "Servicio"
+                              }`
+                            : "No hay citas pendientes, programadas o confirmadas para esta fecha."}
+                        </p>
+                      </div>
+                      <button className="primary" type="button" onClick={() => setView("agenda")}>
+                        Abrir agenda
+                      </button>
+                    </div>
+
+                    <div className="mini-stats">
+                      <MiniStat label="No-shows" value={String(dashboard.metrics.noShows)} />
+                      <MiniStat label="Resenas pendientes" value={String(dashboard.metrics.reviewsPending)} />
+                      <MiniStat label="Flujos abiertos" value={String(dashboard.metrics.whatsappOpenFlows)} />
                     </div>
                   </section>
 
-                  <aside className="stack-column">
-                    <section className="panel">
-                      <div className="section-head">
-                        <div>
-                          <p className="eyebrow">Alta rapida</p>
-                          <h3>Nueva cita</h3>
-                        </div>
-                      </div>
-
-                      <form className="form-grid" onSubmit={submitAppointment}>
-                        <label className="field">
-                          <span>Paciente</span>
-                          <select
-                            value={appointmentForm.contactId}
-                            onChange={(event) =>
-                              setAppointmentForm((current) => ({ ...current, contactId: event.target.value }))
-                            }
-                          >
-                            {dashboard.contacts.map((contact) => (
-                              <option key={contact.id} value={contact.id}>
-                                {contact.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <label className="field">
-                          <span>Servicio</span>
-                          <select
-                            value={appointmentForm.serviceId}
-                            onChange={(event) =>
-                              setAppointmentForm((current) => ({ ...current, serviceId: event.target.value }))
-                            }
-                          >
-                            {dashboard.services.map((service) => (
-                              <option key={service.id} value={service.id}>
-                                {service.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <label className="field">
-                          <span>Fecha y hora</span>
-                          <input
-                            type="datetime-local"
-                            value={appointmentForm.startAtLocal}
-                            onChange={(event) =>
-                              setAppointmentForm((current) => ({ ...current, startAtLocal: event.target.value }))
-                            }
-                          />
-                        </label>
-
-                        <label className="field">
-                          <span>Notas</span>
-                          <textarea
-                            value={appointmentForm.notes}
-                            onChange={(event) =>
-                              setAppointmentForm((current) => ({ ...current, notes: event.target.value }))
-                            }
-                          />
-                        </label>
-
-                        <button className="primary" type="submit">
-                          Guardar cita
-                        </button>
-                      </form>
-                    </section>
-
-                    <section className="panel">
-                      <div className="section-head">
-                        <div>
-                          <p className="eyebrow">Captacion</p>
-                          <h3>Nuevo contacto</h3>
-                        </div>
-                      </div>
-
-                      <form className="form-grid" onSubmit={addContact}>
-                        <label className="field">
-                          <span>Nombre</span>
-                          <input
-                            value={contactForm.name}
-                            onChange={(event) => setContactForm((current) => ({ ...current, name: event.target.value }))}
-                          />
-                        </label>
-                        <label className="field">
-                          <span>Telefono</span>
-                          <input
-                            value={contactForm.phone}
-                            onChange={(event) =>
-                              setContactForm((current) => ({ ...current, phone: event.target.value }))
-                            }
-                          />
-                        </label>
-                        <label className="field">
-                          <span>Email</span>
-                          <input
-                            value={contactForm.email}
-                            onChange={(event) =>
-                              setContactForm((current) => ({ ...current, email: event.target.value }))
-                            }
-                          />
-                        </label>
-                        <label className="field">
-                          <span>Tags</span>
-                          <input
-                            value={contactForm.tags}
-                            onChange={(event) => setContactForm((current) => ({ ...current, tags: event.target.value }))}
-                          />
-                        </label>
-                        <button className="secondary" type="submit">
-                          Guardar contacto
-                        </button>
-                      </form>
-                    </section>
-                  </aside>
-                </section>
-              )}
-
-              {view === "inbox" && (
-                <section className="workspace-grid">
-                  <section className="panel span-two">
+                  <section className="surface-card dashboard-span-4">
                     <div className="section-head">
                       <div>
-                        <p className="eyebrow">Inbox de WhatsApp</p>
-                        <h3>Actividad y simulacion</h3>
+                        <p className="eyebrow">Onboarding</p>
+                        <h3>{dashboard.onboarding.completed}/{dashboard.onboarding.total} completado</h3>
                       </div>
                     </div>
+                    <div className="progress-rail" aria-label={`Onboarding ${dashboard.onboarding.completionRatio}% completado`}>
+                      <span style={{ width: `${dashboard.onboarding.completionRatio}%` }} />
+                    </div>
+                    <div className="checklist-list">
+                      {dashboard.onboarding.items.slice(0, 4).map((item) => (
+                        <ChecklistRow key={item.id} item={item} />
+                      ))}
+                    </div>
+                  </section>
 
-                    <form className="simulate-grid" onSubmit={simulateMessage}>
+                  <section className="surface-card dashboard-span-7">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Automatizaciones</p>
+                        <h3>Senales del sistema</h3>
+                      </div>
+                      <button className="secondary" type="button" onClick={() => void runAutomations()}>
+                        Procesar ahora
+                      </button>
+                    </div>
+                    <div className="signal-grid">
+                      <SignalCard label="Resenas" status={dashboard.automation.reviewsReady} detail="Solicitud tras cita completada." />
+                      <SignalCard label="Recordatorios" status={dashboard.automation.remindersReady} detail="Anti no-show antes de la cita." />
+                      <SignalCard label="Citas automaticas" status={dashboard.automation.autoBookingReady} detail="Captacion guiada por WhatsApp." />
+                      <SignalCard label="Handoff" status={dashboard.automation.handoffReady} detail="Escalada a atencion humana." />
+                    </div>
+                  </section>
+
+                  <section className="surface-card dashboard-span-5">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">WhatsApp</p>
+                        <h3>Simulador de flujo</h3>
+                      </div>
+                    </div>
+                    <form className="form-grid" onSubmit={simulateMessage}>
                       <label className="field">
-                        <span>Telefono</span>
+                        <span>Telefono origen</span>
                         <input
                           value={simulateForm.fromPhone}
-                          onChange={(event) =>
-                            setSimulateForm((current) => ({ ...current, fromPhone: event.target.value }))
-                          }
+                          onChange={(event) => setSimulateForm((current) => ({ ...current, fromPhone: event.target.value }))}
                         />
                       </label>
-                      <label className="field span-two">
+                      <label className="field">
                         <span>Mensaje</span>
                         <input
                           value={simulateForm.text}
@@ -1558,10 +1628,18 @@ function App() {
                         />
                       </label>
                       <button className="primary" type="submit">
-                        Ejecutar flujo
+                        Simular mensaje
                       </button>
                     </form>
+                  </section>
 
+                  <section className="surface-card dashboard-span-6">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Actividad reciente</p>
+                        <h3>Conversaciones</h3>
+                      </div>
+                    </div>
                     <div className="message-stack">
                       {dashboard.recentMessages.length ? (
                         dashboard.recentMessages.map((message) => (
@@ -1581,201 +1659,350 @@ function App() {
                     </div>
                   </section>
 
-                  <aside className="stack-column">
-                    <section className="panel">
-                      <div className="section-head">
-                        <div>
-                          <p className="eyebrow">Flujos abiertos</p>
-                          <h3>Radar operativo</h3>
-                        </div>
-                      </div>
-
-                      <div className="mini-stats">
-                        <MiniStat label="Flujos abiertos" value={String(dashboard.metrics.whatsappOpenFlows)} />
-                        <MiniStat label="Resenas pendientes" value={String(dashboard.metrics.reviewsPending)} />
-                        <MiniStat label="Por confirmar" value={String(dashboard.metrics.pendingConfirmations)} />
-                      </div>
-                    </section>
-
-                    <section className="panel">
-                      <div className="section-head">
-                        <div>
-                          <p className="eyebrow">Equipo</p>
-                          <h3>Usuarios con acceso</h3>
-                        </div>
-                      </div>
-
-                      <div className="team-list">
-                        {dashboard.users.map((user) => (
-                          <div key={user.id} className="team-card">
-                            <strong>{user.name}</strong>
-                            <span>{user.role}</span>
-                            <span className="muted">{user.email}</span>
-                            <span className="muted">
-                              {user.lastLoginAt ? dateTimeLabel(user.lastLoginAt, dashboard.business.timezone) : "Sin login reciente"}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  </aside>
-                </section>
-              )}
-
-              {view === "setup" && (
-                <section className="workspace-grid">
-                  <section className="panel span-two">
+                  <section className="surface-card dashboard-span-6">
                     <div className="section-head">
                       <div>
-                        <p className="eyebrow">Negocio</p>
-                        <h3>Perfil, plan y billing</h3>
+                        <p className="eyebrow">Facturacion</p>
+                        <h3>{billingLabel[dashboard.billing.status]}</h3>
                       </div>
                     </div>
+                    <div className="billing-panel">
+                      <MiniStat label="Plan" value={planLabel[dashboard.business.plan]} />
+                      <MiniStat label="Mensualidad" value={moneyLabel(dashboard.business.planPriceMonthly)} />
+                    </div>
+                    <div className="button-row">
+                      <button className="secondary" type="button" onClick={() => void openBillingLink("checkout")}>
+                        Abrir checkout
+                      </button>
+                      <button className="ghost-button" type="button" onClick={() => void openBillingLink("portal")}>
+                        Portal cliente
+                      </button>
+                    </div>
+                  </section>
 
-                    <form className="form-grid" onSubmit={saveBusinessSettings}>
-                      <div className="inline-grid">
-                        <label className="field">
-                          <span>Nombre</span>
-                          <input
-                            value={businessForm.name}
-                            onChange={(event) => setBusinessForm((current) => ({ ...current, name: event.target.value }))}
-                          />
-                        </label>
-                        <label className="field">
-                          <span>Email</span>
-                          <input
-                            value={businessForm.email}
-                            onChange={(event) => setBusinessForm((current) => ({ ...current, email: event.target.value }))}
-                          />
-                        </label>
+                  <section className="surface-card dashboard-span-12">
+                    <div className="section-head">
+                      <div>
+                        <p className="eyebrow">Navegacion rapida</p>
+                        <h3>Atajos principales</h3>
                       </div>
+                    </div>
+                    <div className="shortcut-grid">
+                      <button className="shortcut-card" type="button" onClick={() => setView("agenda")}>
+                        <span className="material-symbols-outlined">calendar_month</span>
+                        <strong>Citas</strong>
+                        <small>{dashboard.appointments.length} en la fecha seleccionada</small>
+                      </button>
+                      <button className="shortcut-card" type="button" onClick={() => setView("clients")}>
+                        <span className="material-symbols-outlined">groups</span>
+                        <strong>Clientes</strong>
+                        <small>{dashboard.contacts.length} clientes guardados</small>
+                      </button>
+                      <button className="shortcut-card" type="button" onClick={() => setView("setup")}>
+                        <span className="material-symbols-outlined">settings</span>
+                        <strong>Ajustes</strong>
+                        <small>Perfil, servicios y disponibilidad</small>
+                      </button>
+                    </div>
+                  </section>
+                </section>
+              </>
+            )}
 
-                      <div className="inline-grid">
-                        <label className="field">
-                          <span>Telefono</span>
-                          <input
-                            value={businessForm.phone}
-                            onChange={(event) => setBusinessForm((current) => ({ ...current, phone: event.target.value }))}
-                          />
-                        </label>
-                        <label className="field">
-                          <span>Ciudad</span>
-                          <input
-                            value={businessForm.city}
-                            onChange={(event) => setBusinessForm((current) => ({ ...current, city: event.target.value }))}
-                          />
-                        </label>
+            {view === "agenda" && (
+              <section className="dashboard-grid">
+                <section className="surface-card dashboard-span-12">
+                  <div className="section-head calendar-head">
+                    <div>
+                      <p className="eyebrow">Citas</p>
+                      <h3>{calendarMode === "day" ? dateLabel(date) : calendarMode === "week" ? "Semana" : "Mes"}</h3>
+                    </div>
+                    <div className="calendar-toolbar">
+                      <div className="date-nav" aria-label="Navegacion de fecha">
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="Fecha anterior"
+                          onClick={() => setDate((current) => addDays(current, -1))}
+                        >
+                          <span className="material-symbols-outlined">chevron_left</span>
+                        </button>
+                        <input className="calendar-date-input" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="Fecha siguiente"
+                          onClick={() => setDate((current) => addDays(current, 1))}
+                        >
+                          <span className="material-symbols-outlined">chevron_right</span>
+                        </button>
                       </div>
-
-                      <div className="inline-grid">
-                        <label className="field">
-                          <span>Direccion</span>
-                          <input
-                            value={businessForm.address}
-                            onChange={(event) => setBusinessForm((current) => ({ ...current, address: event.target.value }))}
-                          />
-                        </label>
-                        <label className="field">
-                          <span>Timezone</span>
-                          <input
-                            value={businessForm.timezone}
-                            onChange={(event) =>
-                              setBusinessForm((current) => ({ ...current, timezone: event.target.value }))
-                            }
-                          />
-                        </label>
-                      </div>
-
-                      <div className="inline-grid">
-                        <label className="field">
-                          <span>Plan</span>
-                          <select
-                            value={businessForm.plan}
-                            onChange={(event) =>
-                              setBusinessForm((current) => ({ ...current, plan: event.target.value as PlanCode }))
-                            }
+                      <div className="segmented-control">
+                        {(["day", "week", "month"] as CalendarMode[]).map((mode) => (
+                          <button
+                            key={mode}
+                            className={calendarMode === mode ? "active" : ""}
+                            type="button"
+                            onClick={() => setCalendarMode(mode)}
                           >
-                            {Object.entries(planLabel).map(([value, label]) => (
-                              <option key={value} value={value}>
-                                {label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="field">
-                          <span>Billing status</span>
-                          <select
-                            value={businessForm.billingStatus}
-                            onChange={(event) =>
-                              setBusinessForm((current) => ({
-                                ...current,
-                                billingStatus: event.target.value as BillingStatus
-                              }))
-                            }
-                          >
-                            {Object.entries(billingLabel).map(([value, label]) => (
-                              <option key={value} value={value}>
-                                {label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                            {mode === "day" ? "Dia" : mode === "week" ? "Semana" : "Mes"}
+                          </button>
+                        ))}
                       </div>
+                      <button className="primary" type="button" onClick={() => setAppointmentModalOpen(true)}>
+                        Agendar cita
+                      </button>
+                    </div>
+                  </div>
 
+                  {calendarMode === "day" && (
+                    <CalendarDay
+                      appointments={dashboard.appointments}
+                      contactsById={contactsById}
+                      servicesById={servicesById}
+                      timezone={dashboard.business.timezone}
+                      onStatusChange={updateStatus}
+                    />
+                  )}
+
+                  {calendarMode === "week" && (
+                    <CalendarWeek
+                      selectedDate={date}
+                      weekDates={selectedWeek}
+                      appointments={dashboard.appointments}
+                      contactsById={contactsById}
+                      servicesById={servicesById}
+                      timezone={dashboard.business.timezone}
+                      onSelectDate={setDate}
+                    />
+                  )}
+
+                  {calendarMode === "month" && (
+                    <CalendarMonth
+                      selectedDate={date}
+                      monthDates={selectedMonth}
+                      appointments={dashboard.appointments}
+                      contactsById={contactsById}
+                      onSelectDate={setDate}
+                    />
+                  )}
+                </section>
+              </section>
+            )}
+
+            {view === "clients" && (
+              <section className="dashboard-grid">
+                <section className="surface-card dashboard-span-12">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Clientes</p>
+                      <h3>{dashboard.contacts.length} clientes</h3>
+                    </div>
+                    <button className="primary" type="button" onClick={openNewContactModal}>
+                      Nuevo cliente
+                    </button>
+                  </div>
+
+                  <div className="contact-table">
+                    {dashboard.contacts.length ? (
+                      dashboard.contacts.map((contact) => (
+                        <article key={contact.id} className="contact-row">
+                          <div>
+                            <strong>{contact.name}</strong>
+                            <span>{contact.email || "Sin email"}</span>
+                          </div>
+                          <span>{contact.phone}</span>
+                          <span>{contact.tags.join(", ") || "Sin tags"}</span>
+                          <div className="row-actions">
+                            <button className="ghost-button" type="button" onClick={() => openEditContactModal(contact)}>
+                              Editar
+                            </button>
+                            <button className="ghost-button danger" type="button" onClick={() => void deleteContact(contact.id)}>
+                              Eliminar
+                            </button>
+                          </div>
+                        </article>
+                      ))
+                    ) : (
+                      <EmptyState icon="groups" title="Sin clientes" detail="Crea un cliente para poder agendar citas." />
+                    )}
+                  </div>
+                </section>
+              </section>
+            )}
+
+            {view === "setup" && (
+              <section className="dashboard-grid">
+                <section className="surface-card dashboard-span-8">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Negocio</p>
+                      <h3>Perfil</h3>
+                    </div>
+                  </div>
+
+                  <form className="form-grid" onSubmit={saveBusinessSettings}>
+                    <div className="inline-grid">
                       <label className="field">
-                        <span>Google review link</span>
+                        <span>Nombre</span>
                         <input
-                          value={businessForm.googleReviewLink}
+                          value={businessForm.name}
+                          onChange={(event) => setBusinessForm((current) => ({ ...current, name: event.target.value }))}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Email</span>
+                        <input
+                          value={businessForm.email}
                           onChange={(event) =>
-                            setBusinessForm((current) => ({ ...current, googleReviewLink: event.target.value }))
+                            setBusinessForm((current) => ({ ...current, email: event.target.value }))
                           }
                         />
                       </label>
-
-                      <label className="field">
-                        <span>Notas internas</span>
-                        <textarea
-                          value={businessForm.notes}
-                          onChange={(event) => setBusinessForm((current) => ({ ...current, notes: event.target.value }))}
-                        />
-                      </label>
-
-                      <button className="primary" type="submit">
-                        Guardar perfil
-                      </button>
-                    </form>
-                  </section>
-
-                  <section className="panel">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">WhatsApp</p>
-                        <h3>Canal dedicado</h3>
-                      </div>
                     </div>
 
-                    <form className="form-grid" onSubmit={saveChannelSettings}>
+                    <div className="inline-grid">
                       <label className="field">
-                        <span>Display name</span>
+                        <span>Telefono</span>
                         <input
-                          value={channelForm.displayName}
-                          onChange={(event) => setChannelForm((current) => ({ ...current, displayName: event.target.value }))}
+                          value={businessForm.phone}
+                          onChange={(event) =>
+                            setBusinessForm((current) => ({ ...current, phone: event.target.value }))
+                          }
                         />
                       </label>
                       <label className="field">
-                        <span>Numero E.164</span>
+                        <span>Ciudad</span>
+                        <input
+                          value={businessForm.city}
+                          onChange={(event) =>
+                            setBusinessForm((current) => ({ ...current, city: event.target.value }))
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <div className="inline-grid">
+                      <label className="field">
+                        <span>Direccion</span>
+                        <input
+                          value={businessForm.address}
+                          onChange={(event) =>
+                            setBusinessForm((current) => ({ ...current, address: event.target.value }))
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Timezone</span>
+                        <input
+                          value={businessForm.timezone}
+                          onChange={(event) =>
+                            setBusinessForm((current) => ({ ...current, timezone: event.target.value }))
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <button className="primary" type="submit">
+                      Guardar perfil
+                    </button>
+                  </form>
+                </section>
+
+                <section className="surface-card dashboard-span-4">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Catalogo</p>
+                      <h3>Servicios</h3>
+                    </div>
+                  </div>
+
+                  <form className="form-grid" onSubmit={addService}>
+                    <label className="field">
+                      <span>Nombre del servicio</span>
+                      <input
+                        value={serviceForm.name}
+                        onChange={(event) => setServiceForm((current) => ({ ...current, name: event.target.value }))}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Duracion</span>
+                      <input
+                        type="number"
+                        min={5}
+                        step={5}
+                        value={serviceForm.durationMinutes}
+                        onChange={(event) =>
+                          setServiceForm((current) => ({
+                            ...current,
+                            durationMinutes: Number(event.target.value)
+                          }))
+                        }
+                      />
+                    </label>
+                    <button className="secondary" type="submit">
+                      Anadir servicio
+                    </button>
+                  </form>
+
+                  <div className="service-catalog">
+                    {dashboard.services.map((service) => (
+                      <div key={service.id} className="service-pill">
+                        <strong>{service.name}</strong>
+                        <span>{service.durationMinutes} min</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="surface-card dashboard-span-12">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Canal WhatsApp</p>
+                      <h3>Conexion y plantillas</h3>
+                    </div>
+                    <div className="toggle-row">
+                      <StatusToggle
+                        label="Activo"
+                        checked={channelForm.active}
+                        onChange={(active) => setChannelForm((current) => ({ ...current, active }))}
+                      />
+                      <StatusToggle
+                        label="Meta verificado"
+                        checked={channelForm.metaVerified}
+                        onChange={(metaVerified) => setChannelForm((current) => ({ ...current, metaVerified }))}
+                      />
+                      <StatusToggle
+                        label="Templates listos"
+                        checked={channelForm.templatesReady}
+                        onChange={(templatesReady) => setChannelForm((current) => ({ ...current, templatesReady }))}
+                      />
+                    </div>
+                  </div>
+
+                  <form className="form-grid" onSubmit={saveChannelSettings}>
+                    <div className="inline-grid">
+                      <label className="field">
+                        <span>Telefono E.164</span>
                         <input
                           value={channelForm.phoneE164}
                           onChange={(event) => setChannelForm((current) => ({ ...current, phoneE164: event.target.value }))}
                         />
                       </label>
                       <label className="field">
+                        <span>Nombre visible</span>
+                        <input
+                          value={channelForm.displayName}
+                          onChange={(event) => setChannelForm((current) => ({ ...current, displayName: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="inline-grid">
+                      <label className="field">
                         <span>Phone number ID</span>
                         <input
                           value={channelForm.phoneNumberId}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, phoneNumberId: event.target.value }))
-                          }
+                          onChange={(event) => setChannelForm((current) => ({ ...current, phoneNumberId: event.target.value }))}
                         />
                       </label>
                       <label className="field">
@@ -1785,281 +2012,247 @@ function App() {
                           onChange={(event) => setChannelForm((current) => ({ ...current, wabaId: event.target.value }))}
                         />
                       </label>
+                    </div>
+                    <div className="inline-grid">
                       <label className="field">
                         <span>Verify token</span>
                         <input
                           value={channelForm.verifyToken}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, verifyToken: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Token cifrado o referencia</span>
-                        <input
-                          value={channelForm.accessTokenEncrypted}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, accessTokenEncrypted: event.target.value }))
-                          }
+                          onChange={(event) => setChannelForm((current) => ({ ...current, verifyToken: event.target.value }))}
                         />
                       </label>
                       <label className="field">
                         <span>Plantillas</span>
                         <input
                           value={channelForm.templateNames}
-                          onChange={(event) =>
-                            setChannelForm((current) => ({ ...current, templateNames: event.target.value }))
-                          }
+                          onChange={(event) => setChannelForm((current) => ({ ...current, templateNames: event.target.value }))}
                         />
                       </label>
-                      <div className="toggle-row">
-                        <label className="toggle-item">
-                          <input
-                            type="checkbox"
-                            checked={channelForm.templatesReady}
-                            onChange={(event) =>
-                              setChannelForm((current) => ({ ...current, templatesReady: event.target.checked }))
-                            }
-                          />
-                          <span>Plantillas listas</span>
-                        </label>
-                        <label className="toggle-item">
-                          <input
-                            type="checkbox"
-                            checked={channelForm.metaVerified}
-                            onChange={(event) =>
-                              setChannelForm((current) => ({ ...current, metaVerified: event.target.checked }))
-                            }
-                          />
-                          <span>Meta verificado</span>
-                        </label>
-                      </div>
-                      <button className="secondary" type="submit">
-                        Guardar canal
-                      </button>
-                    </form>
-                  </section>
-
-                  <section className="panel">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Catalogo</p>
-                        <h3>Servicios</h3>
-                      </div>
                     </div>
+                    <label className="field">
+                      <span>Access token cifrado</span>
+                      <textarea
+                        value={channelForm.accessTokenEncrypted}
+                        onChange={(event) => setChannelForm((current) => ({ ...current, accessTokenEncrypted: event.target.value }))}
+                      />
+                    </label>
+                    <button className="primary" type="submit">
+                      Guardar canal
+                    </button>
+                  </form>
+                </section>
 
-                    <form className="form-grid" onSubmit={addService}>
-                      <label className="field">
-                        <span>Nombre del servicio</span>
-                        <input
-                          value={serviceForm.name}
-                          onChange={(event) => setServiceForm((current) => ({ ...current, name: event.target.value }))}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Duracion</span>
-                        <input
-                          type="number"
-                          min={5}
-                          step={5}
-                          value={serviceForm.durationMinutes}
-                          onChange={(event) =>
-                            setServiceForm((current) => ({
-                              ...current,
-                              durationMinutes: Number(event.target.value)
-                            }))
-                          }
-                        />
-                      </label>
-                      <button className="secondary" type="submit">
-                        Anadir servicio
-                      </button>
-                    </form>
+                <section className="surface-card dashboard-span-12">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Disponibilidad</p>
+                      <h3>Huecos editables</h3>
+                    </div>
+                  </div>
 
-                    <div className="service-catalog">
-                      {dashboard.services.map((service) => (
-                        <div key={service.id} className="service-pill">
-                          <strong>{service.name}</strong>
-                          <span>{service.durationMinutes} min</span>
+                  <form className="form-grid" onSubmit={saveAvailability}>
+                    <div className="availability-editor">
+                      {availabilityDraft.map((rule, index) => (
+                        <div key={`${rule.weekday}-${index}`} className="availability-row">
+                          <select
+                            value={rule.weekday}
+                            onChange={(event) =>
+                              setAvailabilityDraft((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, weekday: Number(event.target.value) } : item
+                                )
+                              )
+                            }
+                          >
+                            {weekdayLabel.map((label, weekday) => (
+                              <option key={label} value={weekday}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            type="time"
+                            value={rule.start}
+                            onChange={(event) =>
+                              setAvailabilityDraft((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, start: event.target.value } : item
+                                )
+                              )
+                            }
+                          />
+                          <input
+                            type="time"
+                            value={rule.end}
+                            onChange={(event) =>
+                              setAvailabilityDraft((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, end: event.target.value } : item
+                                )
+                              )
+                            }
+                          />
+                          <button
+                            className="ghost-button"
+                            type="button"
+                            onClick={() =>
+                              setAvailabilityDraft((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                            }
+                          >
+                            Quitar
+                          </button>
                         </div>
                       ))}
                     </div>
-                  </section>
 
-                  <section className="panel span-two">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Disponibilidad</p>
-                        <h3>Huecos editables</h3>
-                      </div>
-                    </div>
-
-                    <form className="form-grid" onSubmit={saveAvailability}>
-                      <div className="availability-editor">
-                        {availabilityDraft.map((rule, index) => (
-                          <div key={`${rule.weekday}-${index}`} className="availability-row">
-                            <select
-                              value={rule.weekday}
-                              onChange={(event) =>
-                                setAvailabilityDraft((current) =>
-                                  current.map((item, itemIndex) =>
-                                    itemIndex === index ? { ...item, weekday: Number(event.target.value) } : item
-                                  )
-                                )
-                              }
-                            >
-                              {weekdayLabel.map((label, weekday) => (
-                                <option key={label} value={weekday}>
-                                  {label}
-                                </option>
-                              ))}
-                            </select>
-                            <input
-                              type="time"
-                              value={rule.start}
-                              onChange={(event) =>
-                                setAvailabilityDraft((current) =>
-                                  current.map((item, itemIndex) =>
-                                    itemIndex === index ? { ...item, start: event.target.value } : item
-                                  )
-                                )
-                              }
-                            />
-                            <input
-                              type="time"
-                              value={rule.end}
-                              onChange={(event) =>
-                                setAvailabilityDraft((current) =>
-                                  current.map((item, itemIndex) =>
-                                    itemIndex === index ? { ...item, end: event.target.value } : item
-                                  )
-                                )
-                              }
-                            />
-                            <button
-                              className="ghost-button"
-                              type="button"
-                              onClick={() =>
-                                setAvailabilityDraft((current) => current.filter((_, itemIndex) => itemIndex !== index))
-                              }
-                            >
-                              Quitar
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="button-row">
-                        <button
-                          className="ghost-button"
-                          type="button"
-                          onClick={() =>
-                            setAvailabilityDraft((current) => [
-                              ...current,
-                              {
-                                ...defaultAvailabilityRule
-                              }
-                            ])
-                          }
-                        >
-                          Anadir franja
-                        </button>
-                        <button className="primary" type="submit">
-                          Guardar disponibilidad
-                        </button>
-                      </div>
-                    </form>
-                  </section>
-
-                  <section className="panel">
-                    <div className="section-head">
-                      <div>
-                        <p className="eyebrow">Expansion</p>
-                        <h3>Alta de otro negocio</h3>
-                      </div>
-                    </div>
-
-                    <form className="form-grid" onSubmit={createBusiness}>
-                      <label className="field">
-                        <span>Nombre</span>
-                        <input
-                          value={newBusinessForm.name}
-                          onChange={(event) =>
-                            setNewBusinessForm((current) => ({ ...current, name: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Email</span>
-                        <input
-                          value={newBusinessForm.email}
-                          onChange={(event) =>
-                            setNewBusinessForm((current) => ({ ...current, email: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Telefono</span>
-                        <input
-                          value={newBusinessForm.phone}
-                          onChange={(event) =>
-                            setNewBusinessForm((current) => ({ ...current, phone: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Ciudad</span>
-                        <input
-                          value={newBusinessForm.city}
-                          onChange={(event) =>
-                            setNewBusinessForm((current) => ({ ...current, city: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Direccion</span>
-                        <input
-                          value={newBusinessForm.address}
-                          onChange={(event) =>
-                            setNewBusinessForm((current) => ({ ...current, address: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Plan</span>
-                        <select
-                          value={newBusinessForm.plan}
-                          onChange={(event) =>
-                            setNewBusinessForm((current) => ({ ...current, plan: event.target.value as PlanCode }))
-                          }
-                        >
-                          {Object.entries(planLabel).map(([value, label]) => (
-                            <option key={value} value={value}>
-                              {label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span>Review link</span>
-                        <input
-                          value={newBusinessForm.googleReviewLink}
-                          onChange={(event) =>
-                            setNewBusinessForm((current) => ({ ...current, googleReviewLink: event.target.value }))
-                          }
-                        />
-                      </label>
-                      <button className="primary" type="submit">
-                        Crear negocio
+                    <div className="button-row">
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() =>
+                          setAvailabilityDraft((current) => [
+                            ...current,
+                            {
+                              ...defaultAvailabilityRule
+                            }
+                          ])
+                        }
+                      >
+                        Anadir franja
                       </button>
-                    </form>
-                  </section>
+                      <button className="primary" type="submit">
+                        Guardar disponibilidad
+                      </button>
+                    </div>
+                  </form>
                 </section>
-              )}
-            </>
-          )}
-        </main>
-      </div>
+              </section>
+            )}
+          </>
+        )}
+
+        {dashboard && appointmentModalOpen && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <section className="modal-panel">
+              <div className="modal-head">
+                <div>
+                  <p className="eyebrow">Cita</p>
+                  <h3>Agendar cita</h3>
+                </div>
+                <button className="icon-button" type="button" aria-label="Cerrar modal de cita" onClick={() => setAppointmentModalOpen(false)}>
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+
+              <form className="form-grid" onSubmit={submitAppointment}>
+                <label className="field">
+                  <span>Cliente</span>
+                  <input
+                    value={contactSearch}
+                    placeholder={contactsById.get(appointmentForm.contactId)?.name || "Buscar cliente"}
+                    onChange={(event) => setContactSearch(event.target.value)}
+                  />
+                </label>
+                <div className="contact-suggestions">
+                  {filteredContacts.map((contact) => (
+                    <button
+                      key={contact.id}
+                      className={appointmentForm.contactId === contact.id ? "selected" : ""}
+                      type="button"
+                      onClick={() => {
+                        setAppointmentForm((current) => ({ ...current, contactId: contact.id }));
+                        setContactSearch(contact.name);
+                      }}
+                    >
+                      <strong>{contact.name}</strong>
+                      <span>{contact.phone}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <label className="field">
+                  <span>Servicio</span>
+                  <select
+                    value={appointmentForm.serviceId}
+                    onChange={(event) => setAppointmentForm((current) => ({ ...current, serviceId: event.target.value }))}
+                  >
+                    {dashboard.services.map((service) => (
+                      <option key={service.id} value={service.id}>
+                        {service.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="modal-calendar">
+                  <label className="field">
+                    <span>Fecha y hora</span>
+                    <input
+                      type="datetime-local"
+                      value={appointmentForm.startAtLocal}
+                      onChange={(event) => setAppointmentForm((current) => ({ ...current, startAtLocal: event.target.value }))}
+                    />
+                  </label>
+                </div>
+
+                <label className="field">
+                  <span>Notas</span>
+                  <textarea
+                    value={appointmentForm.notes}
+                    onChange={(event) => setAppointmentForm((current) => ({ ...current, notes: event.target.value }))}
+                  />
+                </label>
+
+                <button className="primary" type="submit">
+                  Guardar cita
+                </button>
+              </form>
+            </section>
+          </div>
+        )}
+
+        {dashboard && contactModalOpen && (
+          <div className="modal-backdrop" role="dialog" aria-modal="true">
+            <section className="modal-panel">
+              <div className="modal-head">
+                <div>
+                  <p className="eyebrow">Cliente</p>
+                  <h3>{editingContactId ? "Editar cliente" : "Nuevo cliente"}</h3>
+                </div>
+                <button className="icon-button" type="button" aria-label="Cerrar modal de cliente" onClick={() => setContactModalOpen(false)}>
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+
+              <form className="form-grid" onSubmit={saveContact}>
+                <label className="field">
+                  <span>Nombre</span>
+                  <input value={contactForm.name} onChange={(event) => setContactForm((current) => ({ ...current, name: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>Telefono</span>
+                  <input value={contactForm.phone} onChange={(event) => setContactForm((current) => ({ ...current, phone: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>Email</span>
+                  <input value={contactForm.email} onChange={(event) => setContactForm((current) => ({ ...current, email: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>Tags</span>
+                  <input value={contactForm.tags} onChange={(event) => setContactForm((current) => ({ ...current, tags: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>Notas</span>
+                  <textarea value={contactForm.notes} onChange={(event) => setContactForm((current) => ({ ...current, notes: event.target.value }))} />
+                </label>
+                <button className="primary" type="submit">
+                  Guardar cliente
+                </button>
+              </form>
+            </section>
+          </div>
+        )}
+      </main>
     </div>
   );
 }
@@ -2068,19 +2261,230 @@ function MetricCard({
   label,
   value,
   description,
-  tone
+  icon
 }: {
   label: string;
   value: string;
   description: string;
-  tone: "teal" | "rust" | "sage" | "ink";
+  icon: string;
 }) {
   return (
-    <article className={`metric-card ${tone}`}>
-      <span>{label}</span>
+    <article className="metric-card">
+      <div className="metric-card-head">
+        <span>{label}</span>
+        <span className="material-symbols-outlined">{icon}</span>
+      </div>
       <strong>{value}</strong>
       <p>{description}</p>
     </article>
+  );
+}
+
+function WeekStrip({
+  selectedDate,
+  weekDates,
+  onSelectDate
+}: {
+  selectedDate: string;
+  weekDates: string[];
+  onSelectDate: (date: string) => void;
+}) {
+  return (
+    <div className="week-strip">
+      {weekDates.map((item) => (
+        <button
+          key={item}
+          className={item === selectedDate ? "week-day active" : "week-day"}
+          type="button"
+          onClick={() => onSelectDate(item)}
+        >
+          <span>{weekdayLabel[new Date(`${item}T00:00:00.000Z`).getUTCDay()]}</span>
+          <strong>{shortDateLabel(item)}</strong>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CalendarDay({
+  appointments,
+  contactsById,
+  servicesById,
+  timezone,
+  onStatusChange
+}: {
+  appointments: Appointment[];
+  contactsById: Map<string, DashboardSummary["contacts"][number]>;
+  servicesById: Map<string, DashboardSummary["services"][number]>;
+  timezone: string;
+  onStatusChange: (appointmentId: string, status: AppointmentStatus) => Promise<void>;
+}) {
+  return (
+    <div className="calendar-section">
+      <div className="calendar-day">
+        <div className="calendar-time-axis">
+          {calendarHours.map((hour) => (
+            <span key={hour}>{String(hour).padStart(2, "0")}:00</span>
+          ))}
+        </div>
+        <div className="calendar-track">
+          {calendarHours.map((hour) => (
+            <div key={hour} className="calendar-hour-line" />
+          ))}
+          {appointments.length ? (
+            appointments.map((appointment) => (
+              <article key={appointment.id} className={`calendar-event ${appointment.status}`} style={getCalendarPosition(appointment)}>
+                <strong>{contactsById.get(appointment.contactId)?.name || "Paciente"}</strong>
+                <span>
+                  {timeLabel(appointment.startAt, timezone)} · {servicesById.get(appointment.serviceId)?.name || "Servicio"}
+                </span>
+              </article>
+            ))
+          ) : (
+            <div className="calendar-empty">
+              <span className="material-symbols-outlined">event_available</span>
+              <strong>Agenda despejada</strong>
+              <p>No hay citas para este dia.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="calendar-list">
+        <div className="section-head compact-head">
+          <div>
+            <p className="eyebrow">Lista operativa</p>
+            <h3>Cambios de estado</h3>
+          </div>
+        </div>
+        <div className="stack-list">
+          {appointments.length ? (
+            appointments.map((appointment) => (
+              <AppointmentRow
+                key={appointment.id}
+                appointment={appointment}
+                contactName={contactsById.get(appointment.contactId)?.name || "Paciente"}
+                serviceName={servicesById.get(appointment.serviceId)?.name || "Servicio"}
+                timezone={timezone}
+                onStatusChange={onStatusChange}
+              />
+            ))
+          ) : (
+            <div className="empty-card">No hay citas para esta fecha.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CalendarWeek({
+  selectedDate,
+  weekDates,
+  appointments,
+  contactsById,
+  servicesById,
+  timezone,
+  onSelectDate
+}: {
+  selectedDate: string;
+  weekDates: string[];
+  appointments: Appointment[];
+  contactsById: Map<string, DashboardSummary["contacts"][number]>;
+  servicesById: Map<string, DashboardSummary["services"][number]>;
+  timezone: string;
+  onSelectDate: (date: string) => void;
+}) {
+  return (
+    <div className="calendar-week">
+      <div className="calendar-week-axis">
+        <span />
+        {weekDates.map((item) => (
+          <button
+            key={item}
+            className={item === selectedDate ? "week-column-head active" : "week-column-head"}
+            type="button"
+            onClick={() => onSelectDate(item)}
+          >
+            <span>{weekdayLabel[new Date(`${item}T00:00:00.000Z`).getUTCDay()]}</span>
+            <strong>{shortDateLabel(item)}</strong>
+          </button>
+        ))}
+      </div>
+      <div className="calendar-week-grid">
+        <div className="week-hours">
+          {calendarHours.map((hour) => (
+            <span key={hour}>{String(hour).padStart(2, "0")}:00</span>
+          ))}
+        </div>
+        <div className="week-columns">
+          {weekDates.map((item) => (
+            <div key={item} className="week-day-column">
+              {appointments
+                .filter((appointment) => appointment.startAt.slice(0, 10) === item)
+                .map((appointment) => (
+                  <article key={appointment.id} className={`week-event ${appointment.status}`}>
+                    <strong>{timeLabel(appointment.startAt, timezone)}</strong>
+                    <span>{contactsById.get(appointment.contactId)?.name || "Paciente"}</span>
+                    <small>{servicesById.get(appointment.serviceId)?.name || "Servicio"}</small>
+                  </article>
+                ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CalendarMonth({
+  selectedDate,
+  monthDates,
+  appointments,
+  contactsById,
+  onSelectDate
+}: {
+  selectedDate: string;
+  monthDates: Array<{ iso: string; inMonth: boolean }>;
+  appointments: Appointment[];
+  contactsById: Map<string, DashboardSummary["contacts"][number]>;
+  onSelectDate: (date: string) => void;
+}) {
+  return (
+    <div className="calendar-month">
+      {weekdayLabel.slice(1).concat(weekdayLabel[0]).map((label) => (
+        <span key={label} className="month-weekday">
+          {label}
+        </span>
+      ))}
+      {monthDates.map((item) => {
+        const dayAppointments = appointments.filter((appointment) => appointment.startAt.slice(0, 10) === item.iso);
+        return (
+          <button
+            key={item.iso}
+            className={`month-cell ${item.inMonth ? "" : "muted-month"} ${item.iso === selectedDate ? "active" : ""}`}
+            type="button"
+            onClick={() => onSelectDate(item.iso)}
+          >
+            <strong>{new Date(`${item.iso}T00:00:00.000Z`).getUTCDate()}</strong>
+            {dayAppointments.slice(0, 3).map((appointment) => (
+              <span key={appointment.id}>{contactsById.get(appointment.contactId)?.name || "Cita"}</span>
+            ))}
+            {dayAppointments.length > 3 && <small>+{dayAppointments.length - 3}</small>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, detail }: { icon: string; title: string; detail: string }) {
+  return (
+    <div className="empty-state">
+      <span className="material-symbols-outlined">{icon}</span>
+      <strong>{title}</strong>
+      <p>{detail}</p>
+    </div>
   );
 }
 
@@ -2099,7 +2503,10 @@ function ChecklistRow({ item }: { item: DashboardSummary["onboarding"]["items"][
 function SignalCard({ label, status, detail }: { label: string; status: boolean; detail: string }) {
   return (
     <div className={`signal-card ${status ? "good" : "warn"}`}>
-      <strong>{label}</strong>
+      <div className="signal-head">
+        <strong>{label}</strong>
+        <span className="material-symbols-outlined accent-icon">auto_awesome</span>
+      </div>
       <span>{status ? "Ready" : "Revisar"}</span>
       <p>{detail}</p>
     </div>
@@ -2115,6 +2522,34 @@ function MiniStat({ label, value }: { label: string; value: string }) {
   );
 }
 
+function StatusToggle({
+  label,
+  checked,
+  onChange,
+  disabled = false
+}: {
+  label: string;
+  checked: boolean;
+  onChange?: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="status-toggle">
+      <span>{label}</span>
+      <button
+        className={checked ? "toggle-switch on" : "toggle-switch"}
+        type="button"
+        aria-label={label}
+        aria-pressed={checked}
+        disabled={disabled}
+        onClick={() => onChange?.(!checked)}
+      >
+        <span />
+      </button>
+    </div>
+  );
+}
+
 function MessageRow({
   message,
   contactName,
@@ -2126,7 +2561,7 @@ function MessageRow({
 }) {
   return (
     <article className={`message-row ${message.direction}`}>
-      <div>
+      <div className="message-copy">
         <strong>{contactName}</strong>
         <p>{message.body}</p>
       </div>
@@ -2152,7 +2587,7 @@ function AppointmentRow({
     <article className="appointment-row">
       <div className="appointment-time">
         <strong>{timeLabel(appointment.startAt, timezone)}</strong>
-        <span>{statusLabel[appointment.status]}</span>
+        <span className={`status-badge ${appointment.status}`}>{statusLabel[appointment.status]}</span>
       </div>
       <div className="appointment-main">
         <strong>{contactName}</strong>
@@ -2177,3 +2612,201 @@ function AppointmentRow({
 }
 
 export default App;
+
+function AdminClientsView({
+  clients,
+  form,
+  loading,
+  planLabel,
+  billingLabel,
+  onRefresh,
+  onSubmit,
+  onFormChange
+}: {
+  clients: AdminClientSummary[];
+  form: typeof defaultAdminClientForm;
+  loading: boolean;
+  planLabel: Record<PlanCode, string>;
+  billingLabel: Record<BillingStatus, string>;
+  onRefresh: () => void;
+  onSubmit: (event: FormEvent) => void;
+  onFormChange: Dispatch<SetStateAction<typeof defaultAdminClientForm>>;
+}) {
+  return (
+    <section className="dashboard-grid">
+      <section className="surface-card dashboard-span-7">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Alta segura</p>
+            <h3>Nuevo cliente</h3>
+          </div>
+        </div>
+
+        <form className="form-grid" onSubmit={onSubmit}>
+          <div className="inline-grid">
+            <label className="field">
+              <span>Negocio</span>
+              <input
+                value={form.businessName}
+                onChange={(event) => onFormChange((current) => ({ ...current, businessName: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>Email negocio</span>
+              <input
+                type="email"
+                value={form.businessEmail}
+                onChange={(event) => onFormChange((current) => ({ ...current, businessEmail: event.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="inline-grid">
+            <label className="field">
+              <span>Telefono</span>
+              <input value={form.phone} onChange={(event) => onFormChange((current) => ({ ...current, phone: event.target.value }))} />
+            </label>
+            <label className="field">
+              <span>Ciudad</span>
+              <input value={form.city} onChange={(event) => onFormChange((current) => ({ ...current, city: event.target.value }))} />
+            </label>
+          </div>
+
+          <div className="inline-grid">
+            <label className="field">
+              <span>Direccion</span>
+              <input
+                value={form.address}
+                onChange={(event) => onFormChange((current) => ({ ...current, address: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>Timezone</span>
+              <input
+                value={form.timezone}
+                onChange={(event) => onFormChange((current) => ({ ...current, timezone: event.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="inline-grid">
+            <label className="field">
+              <span>Plan</span>
+              <select
+                value={form.plan}
+                onChange={(event) => onFormChange((current) => ({ ...current, plan: event.target.value as PlanCode }))}
+              >
+                {Object.entries(planLabel).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Billing</span>
+              <select
+                value={form.billingStatus}
+                onChange={(event) =>
+                  onFormChange((current) => ({ ...current, billingStatus: event.target.value as BillingStatus }))
+                }
+              >
+                {Object.entries(billingLabel).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="field">
+            <span>Google review link</span>
+            <input
+              value={form.googleReviewLink}
+              onChange={(event) => onFormChange((current) => ({ ...current, googleReviewLink: event.target.value }))}
+            />
+          </label>
+
+          <div className="inline-grid">
+            <label className="field">
+              <span>Nombre acceso</span>
+              <input
+                autoComplete="off"
+                value={form.ownerName}
+                onChange={(event) => onFormChange((current) => ({ ...current, ownerName: event.target.value }))}
+              />
+            </label>
+            <label className="field">
+              <span>Email acceso</span>
+              <input
+                type="email"
+                autoComplete="off"
+                value={form.ownerEmail}
+                onChange={(event) => onFormChange((current) => ({ ...current, ownerEmail: event.target.value }))}
+              />
+            </label>
+          </div>
+
+          <label className="field">
+            <span>Password inicial</span>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={form.ownerPassword}
+              onChange={(event) => onFormChange((current) => ({ ...current, ownerPassword: event.target.value }))}
+            />
+          </label>
+
+          <label className="field">
+            <span>Notas internas</span>
+            <textarea value={form.notes} onChange={(event) => onFormChange((current) => ({ ...current, notes: event.target.value }))} />
+          </label>
+
+          <button className="primary" type="submit">
+            Crear cliente
+          </button>
+        </form>
+      </section>
+
+      <section className="surface-card dashboard-span-5">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Clientes</p>
+            <h3>Negocios activos</h3>
+          </div>
+          <button className="ghost-button" type="button" onClick={onRefresh}>
+            Actualizar
+          </button>
+        </div>
+
+        <div className="client-list">
+          {loading ? (
+            <div className="empty-card">Cargando clientes...</div>
+          ) : clients.length ? (
+            clients.map((client) => (
+              <article key={client.business.id} className="client-card">
+                <div>
+                  <strong>{client.business.name}</strong>
+                  <span>{client.business.email}</span>
+                </div>
+                <div className="client-meta">
+                  <span>{planLabel[client.business.plan]}</span>
+                  <span>{billingLabel[client.business.billingStatus]}</span>
+                  <span>{moneyLabel(client.business.planPriceMonthly)}</span>
+                </div>
+                <div className="client-users">
+                  {client.users.map((user) => (
+                    <span key={user.id}>{user.email}</span>
+                  ))}
+                </div>
+              </article>
+            ))
+          ) : (
+            <EmptyState icon="business_center" title="Sin clientes" detail="Crea el primer negocio desde el formulario." />
+          )}
+        </div>
+      </section>
+    </section>
+  );
+}

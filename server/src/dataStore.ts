@@ -445,6 +445,20 @@ export class DataStore {
     });
   }
 
+  async deleteContact(contactId: string) {
+    return this.mutate((db) => {
+      const contact = db.contacts.find((item) => item.id === contactId);
+      if (!contact) {
+        return undefined;
+      }
+
+      db.contacts = db.contacts.filter((item) => item.id !== contactId);
+      db.messages = db.messages.filter((item) => item.contactId !== contactId);
+      db.conversationStates = db.conversationStates.filter((item) => item.contactId !== contactId);
+      return contact;
+    });
+  }
+
   async touchContact(contactId: string) {
     return this.updateContact(contactId, { lastInteractionAt: new Date().toISOString() });
   }

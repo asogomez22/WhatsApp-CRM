@@ -35,6 +35,22 @@ const loginSchema = z.object({
   password: z.string().min(8)
 });
 
+const adminClientSchema = z.object({
+  businessName: z.string().min(2),
+  businessEmail: z.string().email(),
+  phone: z.string().min(8),
+  city: z.string().min(2),
+  address: z.string().optional(),
+  timezone: z.string().min(2).default("Europe/Madrid"),
+  notes: z.string().optional(),
+  plan: z.enum(["reviews", "anti_no_show", "auto_appointments", "full_pack"]),
+  googleReviewLink: z.string().url(),
+  billingStatus: z.enum(["unconfigured", "trial", "active", "past_due"]).default("trial"),
+  ownerName: z.string().min(2),
+  ownerEmail: z.string().email(),
+  ownerPassword: z.string().min(10).max(128)
+});
+
 const businessSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
@@ -111,6 +127,32 @@ const getRouteBusinessId = (req: Request) => String(req.params.businessId ?? "")
 
 const getRouteAppointmentId = (req: Request) => String(req.params.appointmentId ?? "");
 
+const getRouteContactId = (req: Request) => String(req.params.contactId ?? "");
+
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+
+const checkLoginRateLimit = (req: Request, email: string) => {
+  const now = Date.now();
+  const key = `${req.ip}:${email.toLowerCase()}`;
+  const current = authAttempts.get(key);
+
+  if (!current || current.resetAt <= now) {
+    authAttempts.set(key, { count: 1, resetAt: now + 15 * 60 * 1000 });
+    return true;
+  }
+
+  if (current.count >= 8) {
+    return false;
+  }
+
+  current.count += 1;
+  return true;
+};
+
+const clearLoginRateLimit = (req: Request, email: string) => {
+  authAttempts.delete(`${req.ip}:${email.toLowerCase()}`);
+};
+
 const asyncRoute =
   (
     handler: (req: AuthenticatedRequest, res: Response, next: NextFunction) => Promise<unknown> | unknown
@@ -130,6 +172,9 @@ export const createApp = async () => {
   const workflows = new WorkflowEngine(store, whatsapp);
   const auth = new AuthService(store);
   const stripe = new StripeService();
+
+  app.disable("x-powered-by");
+  app.set("trust proxy", 1);
 
   const requireAuth = asyncRoute(async (req, res, next) => {
     const authHeader = req.headers.authorization;
@@ -170,8 +215,37 @@ export const createApp = async () => {
     return res.status(403).json({ message: "No access to this business" });
   });
 
-  app.use(cors());
-  app.use(express.json());
+  const requirePlatformAdmin = asyncRoute(async (req, res, next) => {
+    const user = req.currentUser;
+
+    if (!user) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+
+    if (user.role !== "platform_admin") {
+      return res.status(403).json({ message: "Platform admin role required" });
+    }
+
+    return next();
+  });
+
+  app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "same-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (req.secure || req.headers["x-forwarded-proto"] === "https") {
+      res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    }
+    next();
+  });
+  app.use(
+    cors({
+      origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim()) : true,
+      credentials: false
+    })
+  );
+  app.use(express.json({ limit: "1mb" }));
 
   app.get(
     "/api/health",
@@ -190,13 +264,23 @@ export const createApp = async () => {
     "/api/auth/bootstrap-state",
     asyncRoute(async (_req, res) => {
       const hasUsers = await store.hasUsers();
-      const demoUser = hasUsers ? await store.findUserByEmail("demo@tarracowebs.es") : undefined;
 
       res.json({
         hasUsers,
-        demoUser: demoUser ? "demo@tarracowebs.es" : "",
-        demoPassword: demoUser ? "demo12345" : ""
+        demoUser: "",
+        demoPassword: ""
       });
+    })
+  );
+
+  app.post(
+    "/api/auth/auto-login",
+    asyncRoute(async (_req, res) => {
+      if (process.env.ALLOW_AUTO_LOGIN !== "true") {
+        return res.status(403).json({ message: "Acceso automatico deshabilitado" });
+      }
+
+      return res.json(await auth.autoLogin());
     })
   );
 
@@ -208,8 +292,12 @@ export const createApp = async () => {
         return res.status(400).json(parsed.error.flatten());
       }
 
-      const session = await auth.register(parsed.data);
-      return res.status(201).json(session);
+      try {
+        const session = await auth.register(parsed.data);
+        return res.status(201).json(session);
+      } catch (error) {
+        return res.status(409).json({ message: error instanceof Error ? error.message : "No se pudo registrar" });
+      }
     })
   );
 
@@ -221,7 +309,55 @@ export const createApp = async () => {
         return res.status(400).json(parsed.error.flatten());
       }
 
-      return res.json(await auth.login(parsed.data.email, parsed.data.password));
+      if (!checkLoginRateLimit(req, parsed.data.email)) {
+        return res.status(429).json({ message: "Demasiados intentos. Prueba de nuevo en unos minutos." });
+      }
+
+      try {
+        const session = await auth.login(parsed.data.email, parsed.data.password);
+        clearLoginRateLimit(req, parsed.data.email);
+        return res.json(session);
+      } catch {
+        return res.status(401).json({ message: "Credenciales invalidas" });
+      }
+    })
+  );
+
+  app.get(
+    "/api/admin/clients",
+    requireAuth,
+    requirePlatformAdmin,
+    asyncRoute(async (_req, res) => {
+      const businesses = await store.getBusinesses();
+      const users = await store.getUsers();
+
+      res.json(
+        businesses.map((business) => ({
+          business,
+          users: users
+            .filter((user) => user.businessIds.includes(business.id))
+            .map((user) => auth.sanitizeUser(user))
+        }))
+      );
+    })
+  );
+
+  app.post(
+    "/api/admin/clients",
+    requireAuth,
+    requirePlatformAdmin,
+    asyncRoute(async (req, res) => {
+      const parsed = adminClientSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json(parsed.error.flatten());
+      }
+
+      try {
+        const client = await auth.createClient(parsed.data);
+        return res.status(201).json(client);
+      } catch (error) {
+        return res.status(409).json({ message: error instanceof Error ? error.message : "No se pudo crear cliente" });
+      }
     })
   );
 
@@ -249,6 +385,7 @@ export const createApp = async () => {
   app.post(
     "/api/businesses",
     requireAuth,
+    requirePlatformAdmin,
     asyncRoute(async (req, res) => {
       const parsed = businessSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -273,6 +410,14 @@ export const createApp = async () => {
       const parsed = businessPatchSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json(parsed.error.flatten());
+      }
+
+      const user = req.currentUser as AppUser;
+      if (user.role !== "platform_admin") {
+        const restrictedKeys = ["plan", "billingStatus", "active"] as const;
+        if (restrictedKeys.some((key) => parsed.data[key] !== undefined)) {
+          return res.status(403).json({ message: "Solo un admin puede cambiar plan, billing o estado" });
+        }
       }
 
       const patch = {
@@ -412,6 +557,48 @@ export const createApp = async () => {
       });
 
       res.status(201).json(contact);
+    })
+  );
+
+  app.patch(
+    "/api/businesses/:businessId/contacts/:contactId",
+    requireAuth,
+    requireBusinessAccess,
+    asyncRoute(async (req, res) => {
+      const businessId = getRouteBusinessId(req);
+      const contactId = getRouteContactId(req);
+      const parsed = contactSchema.partial().safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json(parsed.error.flatten());
+      }
+
+      const existing = await store.getContact(contactId);
+      if (!existing || existing.businessId !== businessId) {
+        return res.status(404).json({ message: "Contact not found" });
+      }
+
+      const updated = await store.updateContact(contactId, {
+        ...parsed.data,
+        email: parsed.data.email || undefined
+      });
+      return res.json(updated);
+    })
+  );
+
+  app.delete(
+    "/api/businesses/:businessId/contacts/:contactId",
+    requireAuth,
+    requireBusinessAccess,
+    asyncRoute(async (req, res) => {
+      const businessId = getRouteBusinessId(req);
+      const contactId = getRouteContactId(req);
+      const existing = await store.getContact(contactId);
+      if (!existing || existing.businessId !== businessId) {
+        return res.status(404).json({ message: "Contact not found" });
+      }
+
+      await store.deleteContact(contactId);
+      return res.status(204).send();
     })
   );
 

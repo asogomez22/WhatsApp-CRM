@@ -15,6 +15,20 @@ const planPriceMap: Record<PlanCode, number> = {
 export class AuthService {
   constructor(private readonly store: DataStore) {}
 
+  private async buildSession(user: AppUser) {
+    const updatedUser = (await this.store.updateUser(user.id, {
+      lastLoginAt: new Date().toISOString()
+    })) as AppUser;
+
+    const businesses = await this.store.getBusinessesForUser(updatedUser);
+
+    return {
+      token: this.issueToken(updatedUser),
+      user: this.sanitizeUser(updatedUser),
+      businesses
+    };
+  }
+
   sanitizeUser(user: AppUser) {
     return {
       id: user.id,
@@ -40,16 +54,36 @@ export class AuthService {
       throw new Error("Credenciales invalidas");
     }
 
-    const updatedUser = (await this.store.updateUser(user.id, {
-      lastLoginAt: new Date().toISOString()
-    })) as AppUser;
+    return this.buildSession(user);
+  }
 
-    const businesses = await this.store.getBusinessesForUser(updatedUser);
-    return {
-      token: this.issueToken(updatedUser),
-      user: this.sanitizeUser(updatedUser),
-      businesses
-    };
+  async autoLogin() {
+    if (process.env.ALLOW_AUTO_LOGIN !== "true") {
+      throw new Error("Acceso automatico deshabilitado");
+    }
+
+    const users = await this.store.getUsers();
+    let user =
+      users.find((candidate) => candidate.active && candidate.email.toLowerCase() === "demo@tarracowebs.es") ??
+      users.find((candidate) => candidate.active);
+
+    if (!user) {
+      const businesses = await this.store.getBusinesses();
+      if (!businesses.length) {
+        throw new Error("No hay usuarios disponibles para acceso automatico");
+      }
+
+      user = await this.store.createUser({
+        email: "demo@tarracowebs.es",
+        name: "Acceso automatico",
+        passwordHash: hashPasswordSync("demo12345"),
+        role: "platform_admin",
+        businessIds: businesses.map((business) => business.id),
+        active: true
+      });
+    }
+
+    return this.buildSession(user);
   }
 
   async register(input: {
@@ -105,6 +139,56 @@ export class AuthService {
       token: this.issueToken(user),
       user: this.sanitizeUser(user),
       businesses
+    };
+  }
+
+  async createClient(input: {
+    businessName: string;
+    businessEmail: string;
+    phone: string;
+    city: string;
+    address?: string;
+    timezone?: string;
+    notes?: string;
+    plan: PlanCode;
+    googleReviewLink: string;
+    billingStatus?: Business["billingStatus"];
+    ownerName: string;
+    ownerEmail: string;
+    ownerPassword: string;
+  }) {
+    const existingOwner = await this.store.findUserByEmail(input.ownerEmail);
+    if (existingOwner) {
+      throw new Error("Ya existe un usuario con ese email");
+    }
+
+    const business = await this.store.createBusiness({
+      name: input.businessName,
+      email: input.businessEmail,
+      phone: input.phone,
+      city: input.city,
+      address: input.address,
+      timezone: input.timezone || "Europe/Madrid",
+      notes: input.notes || "",
+      plan: input.plan,
+      planPriceMonthly: planPriceMap[input.plan],
+      googleReviewLink: input.googleReviewLink,
+      billingStatus: input.billingStatus || "trial",
+      active: true
+    });
+
+    const user = await this.store.createUser({
+      email: input.ownerEmail,
+      name: input.ownerName,
+      passwordHash: hashPasswordSync(input.ownerPassword),
+      role: "business_admin",
+      businessIds: [business.id],
+      active: true
+    });
+
+    return {
+      business,
+      user: this.sanitizeUser(user)
     };
   }
 }
